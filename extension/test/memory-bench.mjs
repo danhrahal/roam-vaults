@@ -289,17 +289,17 @@ console.log(`visited ${titles.length} pages, ${Object.values(heads).filter(Boole
 await settle(p, 'after visiting 40 pages');
 
 for (let i = 0; i < 15; i++) { // each edit is followed by a cache write
-  if (DISK) fs.writeFileSync(path.join(vaultDir, `Scratch ${i % 3}.md`), `edit ${i} links [[Alpha]] and [[Budget]]\n`);
+  if (DISK) fs.writeFileSync(path.join(vaultDir, `Scratch ${i % 3}.md`), `edit ${i} links [[Alpha]], [[Budget]] and [[Live edit check]]\n`);
   else await p.evaluate(async ({ i, name }) => {
     const v = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
     const w = await (await v.getFileHandle(`Scratch ${i % 3}.md`, { create: true })).createWritable();
-    await w.write(`edit ${i} links [[Alpha]] and [[Budget]]\n`); await w.close();
+    await w.write(`edit ${i} links [[Alpha]], [[Budget]] and [[Live edit check]]\n`); await w.close();
   }, { i, name: VAULT });
   await p.waitForTimeout(3000);
 }
 await settle(p, 'after 15 note edits');
-const editSeen = await visit(p, 'Alpha');
-console.log(`edits seen without a rescan: ${editSeen !== heads.Alpha} (${heads.Alpha} -> ${editSeen})`);
+const editSeen = await visit(p, 'Live edit check'); // a page only the edited notes link to
+console.log(`edits seen without a rescan: ${editSeen === '3 External Vault References'} (${editSeen || 'nothing shown'})`);
 
 if (DISK) {
   const lines = () => p.evaluate(() => document.querySelector('.rv-panel')?.textContent ?? '');

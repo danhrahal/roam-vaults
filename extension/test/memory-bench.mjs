@@ -2,11 +2,15 @@
 // generated vault, and prints what the vault costs in the worker heap and in each browser process.
 //
 //   node test/memory-bench.mjs [notes=20000] [dist folder=dist]
+//   DISK=1 node test/memory-bench.mjs ...     the vault is a real folder on disk
 //
 // Process numbers are private memory from /proc (Linux only), read without forcing a garbage
-// collection, a few seconds after each step and again after a minute's idle. The vault lives in the
-// browser's private file system, so compare two builds rather than reading the numbers as what a
-// folder on disk costs in Roam's desktop app. See DEVELOPING.md.
+// collection, a few seconds after each step and again after a minute's idle. Without DISK=1 the vault
+// lives in the browser's private file system. With it, the vault is written to a temporary folder and
+// handed to the page the way a dropped folder is, so the handles, the reads and the file watcher are
+// the ones a picked folder gets; it also checks a note whose name is not NFC on disk and a folder
+// renamed while the vault is open. Either way this is not Roam's desktop app: compare two builds.
+// See DEVELOPING.md.
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,6 +21,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const N = +(process.argv[2] ?? 20000);
 const dist = path.resolve(process.argv[3] ?? path.join(import.meta.dirname, '../dist'));
 const IDLE = +(process.env.IDLE_MS ?? 60000);
+const DISK = !!process.env.DISK;
 const VAULT = 'Big Vault';
 
 // ---------- a deterministic vault: folders, frontmatter, links (some unresolved), tags, daily notes ----------
@@ -103,6 +108,7 @@ const url = `http://127.0.0.1:${server.address().port}/`;
 
 // ---------- measuring ----------
 const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rv-bench-'));
+const vaultDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rv-vault-')), VAULT);
 const mb = (x) => Math.round(x / 104857.6) / 10;
 /** Private memory of every process of the browser started on userDir. */
 function procs() {
@@ -176,11 +182,26 @@ async function openPage(ctx) {
   await p.goto(url);
   return p;
 }
-async function loadExtension(p) {
+/** A handle for the folder on disk, as the page gets one for a folder dropped on it. */
+async function dropVault(ctx, p) {
+  await p.evaluate(() => {
+    window.__dropped = new Promise((res, rej) => {
+      document.addEventListener('dragover', (e) => e.preventDefault());
+      document.addEventListener('drop', (e) => { e.preventDefault(); e.dataTransfer.items[0].getAsFileSystemHandle().then(res, rej); }, { once: true });
+    });
+  });
+  const s = await ctx.newCDPSession(p);
+  const data = { items: [], files: [vaultDir], dragOperationsMask: 1 };
+  for (const type of ['dragEnter', 'dragOver', 'drop']) await s.send('Input.dispatchDragEvent', { type, x: 50, y: 50, data });
+  await s.detach();
+  await p.evaluate(async () => { window.__vault = await window.__dropped; });
+}
+async function loadExtension(ctx, p) {
+  if (DISK) await dropVault(ctx, p);
   await p.evaluate(async (name) => {
     // a handle read back from IndexedDB crashes headless Chromium, so the vault always comes through the picker
     await new Promise((r) => { const q = indexedDB.deleteDatabase('roam-vaults'); q.onsuccess = q.onerror = q.onblocked = r; });
-    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    const vault = window.__vault ?? await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
     window.showDirectoryPicker = async () => vault;
     window.__title = 'Start';
     window.roamAlphaAPI = { ui: { mainWindow: { getOpenPageOrBlockUid: async () => 'uid' } }, pull: () => ({ ':node/title': window.__title }) };
@@ -208,24 +229,42 @@ const visit = (p, title) => p.evaluate(async (title) => {
 }, title);
 
 // ---------- 1. write the vault, in a browser of its own ----------
-let ctx = await launch();
-let p = await openPage(ctx);
-const seeded = await p.evaluate(({ n, name }) => new Promise((res, rej) => {
-  const w = new Worker('/seed-worker.js');
-  w.onmessage = ({ data }) => { w.terminate(); res(data); };
-  w.onerror = (e) => rej(new Error(e.message));
-  w.postMessage({ n, name });
-}), { n: N, name: VAULT });
-console.log(`vault: ${seeded.files} files, ${mb(seeded.bytes)} MB of text, ${seeded.links} links`);
-await ctx.close();
+let ctx, p, seeded;
+// Checked in the disk run: a note whose name is not NFC on disk, and a note in a folder renamed later.
+const NFD_NOTE = 'Re\u0301sume\u0301s/2026/Cafe\u0301 plan.md', MOVED_DIR = 'Moved later', MOVED_TO = 'Moved now';
+if (DISK) {
+  const files = gen(N);
+  files.set(NFD_NOTE, 'the line of the decomposed note [[Disk name check]]\n');
+  files.set(`${MOVED_DIR}/Deep/Kept.md`, 'the line of the moved note [[Folder move check]]\n');
+  seeded = { files: files.size, bytes: 0, links: 0 };
+  const made = new Set();
+  for (const [rel, text] of files) {
+    const f = path.join(vaultDir, rel), d = path.dirname(f);
+    if (!made.has(d)) { fs.mkdirSync(d, { recursive: true }); made.add(d); }
+    fs.writeFileSync(f, text);
+    seeded.bytes += Buffer.byteLength(text); seeded.links += text.split('[[').length - 1;
+  }
+} else {
+  ctx = await launch();
+  p = await openPage(ctx);
+  seeded = await p.evaluate(({ n, name }) => new Promise((res, rej) => {
+    const w = new Worker('/seed-worker.js');
+    w.onmessage = ({ data }) => { w.terminate(); res(data); };
+    w.onerror = (e) => rej(new Error(e.message));
+    w.postMessage({ n, name });
+  }), { n: N, name: VAULT });
+  await ctx.close();
+}
+console.log(`vault${DISK ? ' on disk' : ''}: ${seeded.files} files, ${mb(seeded.bytes)} MB of text, ${seeded.links} links`);
 
 // ---------- 2. first index, in a fresh browser ----------
 ctx = await launch();
 p = await openPage(ctx);
 await settle(p, 'page without the extension');
-await loadExtension(p);
+await loadExtension(ctx, p);
 await press(p, 'Add vault folder');
 console.log(`first index took ${await indexed(p)} ms`);
+console.log(`status: ${await p.evaluate(() => document.querySelector('#settings-box .rv-settings-status')?.textContent)}`);
 await settle(p, 'first index: just finished');
 await settle(p, 'first index: idle', IDLE);
 await ctx.close();
@@ -235,7 +274,7 @@ ctx = await launch();
 p = await openPage(ctx);
 base = null;
 await settle(p, 'page without the extension');
-await loadExtension(p);
+await loadExtension(ctx, p);
 await press(p, 'Add vault folder');
 console.log(`start from the cache took ${await indexed(p)} ms`);
 await settle(p, 'later start: just finished');
@@ -250,7 +289,8 @@ console.log(`visited ${titles.length} pages, ${Object.values(heads).filter(Boole
 await settle(p, 'after visiting 40 pages');
 
 for (let i = 0; i < 15; i++) { // each edit is followed by a cache write
-  await p.evaluate(async ({ i, name }) => {
+  if (DISK) fs.writeFileSync(path.join(vaultDir, `Scratch ${i % 3}.md`), `edit ${i} links [[Alpha]] and [[Budget]]\n`);
+  else await p.evaluate(async ({ i, name }) => {
     const v = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
     const w = await (await v.getFileHandle(`Scratch ${i % 3}.md`, { create: true })).createWritable();
     await w.write(`edit ${i} links [[Alpha]] and [[Budget]]\n`); await w.close();
@@ -258,6 +298,21 @@ for (let i = 0; i < 15; i++) { // each edit is followed by a cache write
   await p.waitForTimeout(3000);
 }
 await settle(p, 'after 15 note edits');
+const editSeen = await visit(p, 'Alpha');
+console.log(`edits seen without a rescan: ${editSeen !== heads.Alpha} (${heads.Alpha} -> ${editSeen})`);
+
+if (DISK) {
+  const lines = () => p.evaluate(() => document.querySelector('.rv-panel')?.textContent ?? '');
+  await visit(p, 'Disk name check');
+  console.log(`a note whose name is not NFC on disk shows its line: ${(await lines()).includes('the line of the decomposed note')}`);
+  await visit(p, 'Folder move check');
+  const before = (await lines()).includes('the line of the moved note');
+  fs.renameSync(path.join(vaultDir, MOVED_DIR), path.join(vaultDir, MOVED_TO));
+  await p.waitForTimeout(8000); // the watcher reports it and the vault is rescanned
+  await visit(p, 'Start'); await visit(p, 'Folder move check');
+  const text = await lines();
+  console.log(`a note in a folder renamed while open shows its line: before ${before}, after ${text.includes('the line of the moved note')}, under the new name ${text.includes(MOVED_TO)}`);
+}
 
 await press(p, 'Rescan');
 console.log(`rescan took ${await indexed(p)} ms`);
@@ -269,3 +324,4 @@ console.log(JSON.stringify({ heads }));
 clearInterval(watch);
 await ctx.close(); server.close();
 fs.rmSync(userDir, { recursive: true, force: true });
+fs.rmSync(path.dirname(vaultDir), { recursive: true, force: true });

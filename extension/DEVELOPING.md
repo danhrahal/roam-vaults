@@ -56,12 +56,18 @@ three when changing the indexer:
 ```bash
 npm run build
 node test/memory-bench.mjs            # 20,000 generated notes; pass a number for another size
+DISK=1 node test/memory-bench.mjs     # the same, with the vault in a real folder on disk
 ```
 
 It loads `dist/extension.js` in headless Chromium against a stand-in Roam page and a generated vault, then
 prints the worker heap and each process's private memory after a first index, a start from the cache, some
-browsing, some edits and a rescan. The vault lives in the browser's private file system, so the absolute
-numbers are not what a folder on disk in Roam's desktop app costs; compare runs of two builds.
+browsing, some edits and a rescan. Pass a second argument to measure another build's `dist` folder.
+
+Without `DISK=1` the vault lives in the browser's private file system. With it, the vault is written to a
+temporary folder and handed to the page the way a dropped folder is, so the handles, the reads and the file
+watcher are the ones a picked folder gets. That run also checks a note whose name is not NFC on disk and a
+folder renamed while the vault is open. Neither is Roam's desktop app, so compare runs of two builds rather
+than reading the numbers as what a vault costs there.
 
 Things that made 0.1.0 heavy, to keep out:
 

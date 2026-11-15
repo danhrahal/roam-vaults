@@ -1,6 +1,6 @@
 {
   "name": "roam-vaults",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Vaults for Roam Research: see notes from your Obsidian-style vaults in your Roam graph.",
@@ -8,7 +8,8 @@
     "build": "node build.mjs",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "test:browser": "npm run build && node test/browser-smoke.mjs"
+    "test:browser": "npm run build && node test/browser-smoke.mjs",
+    "bench:memory": "npm run build && node test/memory-bench.mjs"
   },
   "devDependencies": {
     "esbuild": "0.24.0",

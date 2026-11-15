@@ -1,19 +1,21 @@
 // Vault index + Obsidian-like link resolver with incremental updates. No Node APIs.
-import type { Link, ParsedNote } from './types.ts';
-import { intern } from './parser.ts';
+//
+// The index keeps one small record per note (see Note) and, for every link target name, the
+// notes that link to it. Links are resolved when a page asks for them, not ahead of time: a
+// record per link, each in two or three lookup sets, cost several times more memory than the
+// rest of the index together, and had to be re-resolved whenever a file came or went.
+import type { Note, ParsedNote } from './types.ts';
 
-export interface LinkRec {
-  src: string;            // source note path
-  link: Link;
-  key: string;            // normalized linkpath (lowercase, NFC, no leading '/', no .md); '' = self
-  nameKey: string;        // basename part of key: bucket used for incremental re-resolution
+export interface LinkHit {
+  src: string;            // the note the link is in
+  line: number;           // 0-based line in that note
+  embed: boolean;
   resolved: string | null;
-  candidates: number;     // >1 => ambiguous (tie-broken)
 }
 
-interface FileEntry { path: string; keyPath: string; nameKey: string; isMd: boolean; depth: number }
-
 const MD = /\.md$/i;
+/** The one empty list every note without links, tags or aliases shares. */
+export const NONE: never[] = Object.freeze([]) as never[];
 export const nfcLower = (s: string) => s.normalize('NFC').toLowerCase();
 const dirOf = (p: string) => { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); };
 const baseOf = (p: string) => { const i = p.lastIndexOf('/'); return i < 0 ? p : p.slice(i + 1); };
@@ -39,40 +41,52 @@ function joinRel(dir: string, rel: string): string | null {
   return out.join('/');
 }
 
+/** Reduce a parsed note to what the index keeps. */
+export function toNote(p: ParsedNote, size = 0, mtime = 0): Note {
+  const links: (string | number)[] = [];
+  for (const l of p.links) if (l.target !== '') links.push(l.target, l.line * 2 + (l.embed ? 1 : 0));
+  // slice(): an array that grew by push keeps room for more, and there is one of these per note
+  return {
+    path: p.path, size, mtime,
+    aliases: p.aliases.length ? p.aliases.slice() : NONE,
+    tags: p.tags.length ? p.tags.slice() : NONE,
+    links: links.length ? links.slice() : NONE,
+  };
+}
+
 export type FileListener = (path: string, kind: 'add' | 'remove' | 'update') => void;
 
 export class VaultIndex {
-  files = new Map<string, FileEntry>();
-  notes = new Map<string, ParsedNote>();
-  byName = new Map<string, string[]>();                 // nameKey -> paths
-  outgoing = new Map<string, LinkRec[]>();              // src -> recs
-  backlinks = new Map<string, Set<LinkRec>>();          // resolved target path -> recs
-  unresolved = new Map<string, Set<LinkRec>>();         // link key -> recs
-  byLinkName = new Map<string, Set<LinkRec>>();         // nameKey -> recs (resolved or not)
-  aliasIdx = new Map<string, Set<string>>();            // nfcLower(alias) -> paths
-  tagIdx = new Map<string, Set<string>>();              // nfcLower(tag) -> paths (incl. parent tags)
+  /** Every file in the vault -> its name key (lowercase file name; notes without ".md"). */
+  files = new Map<string, string>();
+  notes = new Map<string, Note>();
+  byName = new Map<string, string[]>();                 // name key -> paths
+  /** Name key of a link target -> where such links are, resolved or not, as flat pairs:
+   *  the note, then the position of the link's target in note.links. */
+  linkers = new Map<string, (Note | number)[]>();
+  aliasIdx = new Map<string, string[]>();               // nfcLower(alias) -> paths
+  tagIdx = new Map<string, string[]>();                 // nfcLower(tag) -> paths (incl. parent tags)
   listeners: FileListener[] = [];
   /** Tie-break duplicates by shared folder prefix with the linking note (not Obsidian behaviour; see report). */
   preferNearby = false;
 
   // ---------- file registry ----------
-  private register(path: string): FileEntry {
+  private register(path: string): string {
     path = path.normalize('NFC');
-    const keyPath = fileKeyPath(path);
-    const e: FileEntry = { path, keyPath, nameKey: baseOf(keyPath), isMd: MD.test(path), depth: path.split('/').length };
-    this.files.set(path, e);
-    const arr = this.byName.get(e.nameKey);
-    if (arr) arr.push(path); else this.byName.set(e.nameKey, [path]);
-    return e;
+    const nameKey = baseOf(fileKeyPath(path));
+    this.files.set(path, nameKey);
+    const arr = this.byName.get(nameKey);
+    if (arr) arr.push(path); else this.byName.set(nameKey, [path]);
+    return nameKey;
   }
-  private unregister(path: string): FileEntry | undefined {
-    const e = this.files.get(path);
-    if (!e) return;
+  private unregister(path: string): string | undefined {
+    const nameKey = this.files.get(path);
+    if (nameKey === undefined) return;
     this.files.delete(path);
-    const arr = this.byName.get(e.nameKey)!;
+    const arr = this.byName.get(nameKey)!;
     arr.splice(arr.indexOf(path), 1);
-    if (!arr.length) this.byName.delete(e.nameKey);
-    return e;
+    if (!arr.length) this.byName.delete(nameKey);
+    return nameKey;
   }
 
   // ---------- resolution ----------
@@ -90,12 +104,12 @@ export class VaultIndex {
     let cands = this.byName.get(nameKey);
     if (!cands || !cands.length) return [];
     if (key.includes('/')) {
-      const exact = cands.filter((p) => this.files.get(p)!.keyPath === key);
+      const exact = cands.filter((p) => fileKeyPath(p) === key);
       if (exact.length) return exact;
       const rel = joinRel(nfcLower(dirOf(src)), key);
-      const relHit = rel ? cands.filter((p) => this.files.get(p)!.keyPath === rel) : [];
+      const relHit = rel ? cands.filter((p) => fileKeyPath(p) === rel) : [];
       if (relHit.length) return relHit;
-      cands = cands.filter((p) => this.files.get(p)!.keyPath.endsWith('/' + key));
+      cands = cands.filter((p) => fileKeyPath(p).endsWith('/' + key));
       if (!cands.length) return [];
     }
     if (cands.length === 1) return cands.slice();
@@ -103,7 +117,6 @@ export class VaultIndex {
     const wantBase = baseOf(t.replace(/^\/+/, '')).replace(MD, '');
     const srcDir = dirOf(src);
     return cands.slice().sort((a, b) => {
-      const ea = this.files.get(a)!, eb = this.files.get(b)!;
       const ca = baseOf(a).replace(MD, '') === wantBase ? 0 : 1, cb = baseOf(b).replace(MD, '') === wantBase ? 0 : 1;
       if (ca !== cb) return ca - cb;
       const sa = dirOf(a) === srcDir ? 0 : 1, sb = dirOf(b) === srcDir ? 0 : 1;
@@ -112,101 +125,124 @@ export class VaultIndex {
         const pa = commonDirs(a, src), pb = commonDirs(b, src);
         if (pa !== pb) return pb - pa;
       }
-      if (ea.depth !== eb.depth) return ea.depth - eb.depth;
+      const da = depth(a), db = depth(b);
+      if (da !== db) return da - db;
       if (a.length !== b.length) return a.length - b.length;
       return a < b ? -1 : 1;
     });
   }
 
-  private resolveRec(r: LinkRec) {
-    const c = this.candidates(r.link.target, r.src);
-    r.resolved = c.length ? c[0] : null;
-    r.candidates = c.length;
-    if (r.resolved !== null) add(this.backlinks, r.resolved, r);
-    else add(this.unresolved, r.key, r);
+  /** Normalized link text of a target written in the note at src (lowercase, NFC, no leading
+   *  '/', no .md): what an unresolved link is looked up by. Its file-name part is the name key. */
+  private keyOf(target: string, src: string): string {
+    return linkKey(target.startsWith('./') || target.startsWith('../') ? (joinRel(dirOf(src), target) ?? target) : target);
   }
-  private unresolveRec(r: LinkRec) {
-    if (r.resolved !== null) del(this.backlinks, r.resolved, r);
-    else del(this.unresolved, r.key, r);
+
+  /** Links from other notes that resolve to one of these files. */
+  backlinks(paths: Iterable<string>): LinkHit[] {
+    const want = new Set(paths);
+    const names = new Set<string>();
+    for (const p of want) { const k = this.files.get(p); if (k !== undefined) names.add(k); }
+    const out: LinkHit[] = [];
+    // The same target written in the same folder resolves the same way.
+    const memo = new Map<string, string | null>();
+    for (const name of names) {
+      const at = this.linkers.get(name) ?? NONE;
+      for (let j = 0; j < at.length; j += 2) {
+        const n = at[j] as Note, i = at[j + 1] as number;
+        const target = n.links[i] as string, where = n.links[i + 1] as number;
+        const mk = `${dirOf(n.path)}\n${target}`;
+        let to = memo.get(mk);
+        if (to === undefined) memo.set(mk, to = this.candidates(target, n.path)[0] ?? null);
+        if (to === null || to === n.path || !want.has(to)) continue;
+        out.push({ src: n.path, line: where >> 1, embed: (where & 1) === 1, resolved: to });
+      }
+    }
+    return out;
   }
-  private reresolveBucket(nameKey: string) {
-    const bucket = this.byLinkName.get(nameKey);
-    if (!bucket) return 0;
-    for (const r of bucket) { this.unresolveRec(r); this.resolveRec(r); }
-    return bucket.size;
+
+  /** Links written as this text (a linkKey) that resolve to no file. */
+  unresolved(key: string): LinkHit[] {
+    const out: LinkHit[] = [];
+    const at = this.linkers.get(baseOf(key)) ?? NONE;
+    for (let j = 0; j < at.length; j += 2) {
+      const n = at[j] as Note, i = at[j + 1] as number;
+      const target = n.links[i] as string, where = n.links[i + 1] as number;
+      if (this.keyOf(target, n.path) !== key || this.candidates(target, n.path).length) continue;
+      out.push({ src: n.path, line: where >> 1, embed: (where & 1) === 1, resolved: null });
+    }
+    return out;
+  }
+
+  /** What each link in a note resolves to, in the order they are written. */
+  outgoing(path: string): (string | null)[] {
+    const out: (string | null)[] = [];
+    const l = this.notes.get(path)?.links ?? NONE;
+    for (let i = 0; i < l.length; i += 2) out.push(this.candidates(l[i] as string, path)[0] ?? null);
+    return out;
   }
 
   // ---------- note contributions ----------
-  private addContrib(note: ParsedNote) {
-    const recs: LinkRec[] = [];
-    for (const link of note.links) {
-      const key = link.target === '' ? '' : linkKey(/^\.\.?\//.test(link.target) ? (joinRel(dirOf(note.path), link.target) ?? link.target) : link.target);
-      const r: LinkRec = { src: note.path, link, key: intern(key), nameKey: intern(baseOf(key)), resolved: null, candidates: 0 };
-      recs.push(r);
-      if (key !== '') add(this.byLinkName, r.nameKey, r);
-      this.resolveRec(r);
+  private addContrib(note: Note) {
+    const l = note.links;
+    for (let i = 0; i < l.length; i += 2) {
+      const name = baseOf(this.keyOf(l[i] as string, note.path));
+      const at = this.linkers.get(name);
+      if (at) at.push(note, i); else this.linkers.set(name, [note, i]);
     }
-    this.outgoing.set(note.path, recs);
-    for (const a of note.aliases) add(this.aliasIdx, nfcLower(a), note.path);
-    for (const t of note.tags) for (const k of tagKeys(t)) add(this.tagIdx, k, note.path);
+    for (const k of aliasKeys(note)) push(this.aliasIdx, k, note.path);
+    for (const k of noteTagKeys(note)) push(this.tagIdx, k, note.path);
   }
   private removeContrib(path: string) {
-    const recs = this.outgoing.get(path);
-    if (recs) for (const r of recs) { this.unresolveRec(r); if (r.key !== '') del(this.byLinkName, r.nameKey, r); }
-    this.outgoing.delete(path);
     const note = this.notes.get(path);
-    if (note) {
-      for (const a of note.aliases) del(this.aliasIdx, nfcLower(a), path);
-      for (const t of note.tags) for (const k of tagKeys(t)) del(this.tagIdx, k, path);
+    if (!note) return;
+    const l = note.links, names = new Set<string>();
+    for (let i = 0; i < l.length; i += 2) names.add(baseOf(this.keyOf(l[i] as string, path)));
+    for (const name of names) {
+      const at = this.linkers.get(name);
+      if (!at) continue;
+      let w = 0;
+      for (let r = 0; r < at.length; r += 2) if (at[r] !== note) { at[w++] = at[r]; at[w++] = at[r + 1]; }
+      at.length = w;
+      if (!w) this.linkers.delete(name);
     }
+    for (const k of aliasKeys(note)) pull(this.aliasIdx, k, path);
+    for (const k of noteTagKeys(note)) pull(this.tagIdx, k, path);
   }
 
   // ---------- public API ----------
-  /** Bulk build: register every name first so no re-resolution churn. */
-  build(notes: ParsedNote[], attachments: string[]) {
+  build(notes: Note[], attachments: string[]) {
     for (const p of attachments) this.register(p);
     for (const n of notes) { this.register(n.path); this.notes.set(n.path, n); }
     for (const n of notes) this.addContrib(n);
+    // Lists that grew one entry at a time keep spare room: trim them once everything is in.
+    for (const m of [this.linkers, this.aliasIdx, this.tagIdx] as Map<string, unknown[]>[]) {
+      for (const [k, list] of m) if (list.length > 1) m.set(k, list.slice());
+    }
   }
 
-  /** Add or update a note. Returns number of other links re-resolved. */
-  upsertNote(note: ParsedNote): number {
-    let rer = 0;
+  /** Add or update a note. */
+  upsertNote(note: Note) {
     const isNew = !this.files.has(note.path);
-    if (isNew) {
-      const e = this.register(note.path);
-      rer = this.reresolveBucket(e.nameKey);
-    } else this.removeContrib(note.path);
+    if (isNew) this.register(note.path); else this.removeContrib(note.path);
     this.notes.set(note.path, note);
     this.addContrib(note);
     for (const l of this.listeners) l(note.path, isNew ? 'add' : 'update');
-    return rer;
   }
-  addAttachment(path: string): number {
-    if (this.files.has(path)) return 0;
-    const e = this.register(path);
+  addAttachment(path: string) {
+    if (this.files.has(path)) return;
+    this.register(path);
     for (const l of this.listeners) l(path, 'add');
-    return this.reresolveBucket(e.nameKey);
   }
-  removeFile(path: string): number {
+  removeFile(path: string) {
     this.removeContrib(path);
     for (const l of this.listeners) l(path, 'remove');
     this.notes.delete(path);
-    const e = this.unregister(path);
-    return e ? this.reresolveBucket(e.nameKey) : 0;
-  }
-
-  /** Compact, JSON-serializable form (parsed notes only; maps are rebuilt on load). */
-  toJSON() {
-    return { v: 1, attachments: [...this.files.values()].filter((e) => !e.isMd).map((e) => e.path), notes: [...this.notes.values()] };
-  }
-  static fromJSON(j: { attachments: string[]; notes: ParsedNote[] }): VaultIndex {
-    const idx = new VaultIndex();
-    idx.build(j.notes, j.attachments);
-    return idx;
+    this.unregister(path);
   }
 }
 
+const depth = (p: string) => p.split('/').length;
 function commonDirs(a: string, b: string): number {
   const x = a.split('/'), y = b.split('/');
   let n = 0;
@@ -222,5 +258,23 @@ export function tagKeys(tag: string): string[] {
   return out;
 }
 
-function add<K, V>(m: Map<K, Set<V>>, k: K, v: V) { const s = m.get(k); if (s) s.add(v); else m.set(k, new Set([v])); }
-function del<K, V>(m: Map<K, Set<V>>, k: K, v: V) { const s = m.get(k); if (!s) return; s.delete(v); if (!s.size) m.delete(k); }
+/** The keys a note is listed under, each once (so it is added and removed exactly once). */
+function aliasKeys(note: Note): string[] {
+  if (!note.aliases.length) return NONE;
+  return [...new Set(note.aliases.map(nfcLower))];
+}
+function noteTagKeys(note: Note): string[] {
+  if (!note.tags.length) return NONE;
+  const out = new Set<string>();
+  for (const t of note.tags) for (const k of tagKeys(t)) out.add(k);
+  return [...out];
+}
+
+function push<V>(m: Map<string, V[]>, k: string, v: V) { const list = m.get(k); if (list) list.push(v); else m.set(k, [v]); }
+function pull<V>(m: Map<string, V[]>, k: string, v: V) {
+  const list = m.get(k);
+  if (!list) return;
+  const i = list.indexOf(v);
+  if (i >= 0) { list[i] = list[list.length - 1]; list.pop(); }
+  if (!list.length) m.delete(k);
+}

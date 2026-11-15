@@ -1,5 +1,5 @@
 // Roam page title -> vault associations. No Node APIs.
-import { VaultIndex, type LinkRec, nfcLower, linkKey, fileKeyPath } from './vault-index.ts';
+import { VaultIndex, nfcLower, linkKey, fileKeyPath } from './vault-index.ts';
 import { compileFormat, parseWithFormat, roamDailyToIso, formatIso, type DateFormat } from './dates.ts';
 
 export type NoteHow =
@@ -14,14 +14,19 @@ export type NoteHow =
 
 export interface NoteMatch { path: string; how: NoteHow }
 export interface LinkMatch {
-  src: string; line: number; col: number; kind: string; embed: boolean;
-  target: string; subpath: string; snippet?: string;
+  src: string; line: number; embed: boolean;
   resolvedTo: string | null;      // null => unresolved link (only exists as text in the vault)
   via: 'backlink' | 'unresolved' | 'daily-unresolved';
 }
 export interface Associations { title: string; notes: NoteMatch[]; links: LinkMatch[]; tagged: { path: string; tag: string }[] }
 
-export interface MatcherOptions { dailyFormats: string[]; loose?: boolean; nsSeparators?: string[] }
+export interface MatcherOptions {
+  dailyFormats: string[];
+  /** Match titles with the characters file names can't have removed. On unless set to false. */
+  sanitized?: boolean;
+  loose?: boolean;
+  nsSeparators?: string[];
+}
 
 const ILLEGAL = /[\\/:*?"<>|#^\[\]]/g;           // illegal in Obsidian file names / link targets
 export const sanitizedKey = (s: string) => nfcLower(s).replace(ILLEGAL, ' ').replace(/\s+/g, ' ').trim();
@@ -56,7 +61,7 @@ export class RoamMatcher {
   private addPath(p: string) {
     if (!/\.md$/i.test(p)) return;
     const k = this.keysFor(p);
-    add(this.sanitized, k.s, p);
+    if (this.opts.sanitized !== false) add(this.sanitized, k.s, p);
     if (this.opts.loose) add(this.loose, k.l, p);
     for (const iso of k.isos) add(this.daily, iso, p);
   }
@@ -95,17 +100,16 @@ export class RoamMatcher {
     if (this.opts.loose) for (const p of this.loose.get(looseKey(t)) ?? []) put(p, 'loose');
 
     // (d) notes that link to it: backlinks of every matched note + unresolved links by text
-    const seen = new Set<LinkRec>();
     const links: LinkMatch[] = [];
-    const emit = (r: LinkRec, via: LinkMatch['via']) => {
-      if (seen.has(r) || r.src === r.resolved && r.link.target === '') return;
-      seen.add(r);
-      links.push({ src: r.src, line: r.link.line, col: r.link.col, kind: r.link.kind, embed: r.link.embed, target: r.link.target,
-        subpath: r.link.subpath, snippet: r.link.snippet, resolvedTo: r.resolved, via });
+    for (const h of idx.backlinks(notes.keys())) links.push({ src: h.src, line: h.line, embed: h.embed, resolvedTo: h.resolved, via: 'backlink' });
+    const keys = new Set<string>();
+    const byText = (key: string, via: LinkMatch['via']) => {
+      if (keys.has(key)) return;
+      keys.add(key);
+      for (const h of idx.unresolved(key)) links.push({ src: h.src, line: h.line, embed: h.embed, resolvedTo: null, via });
     };
-    for (const p of notes.keys()) for (const r of idx.backlinks.get(p) ?? []) if (r.src !== p) emit(r, 'backlink');
-    for (const r of idx.unresolved.get(linkKey(t)) ?? []) emit(r, 'unresolved');
-    if (iso) for (const f of this.opts.dailyFormats) for (const r of idx.unresolved.get(linkKey(formatIso(iso, f))) ?? []) emit(r, 'daily-unresolved');
+    byText(linkKey(t), 'unresolved');
+    if (iso) for (const f of this.opts.dailyFormats) byText(linkKey(formatIso(iso, f)), 'daily-unresolved');
 
     // tags: Roam treats #tag and [[tag]] as the same page
     const tagged: { path: string; tag: string }[] = [];

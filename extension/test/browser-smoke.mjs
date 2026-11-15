@@ -20,7 +20,8 @@ const server = http.createServer((req, res) => {
 }).listen(0);
 const url = `http://127.0.0.1:${server.address().port}/`;
 
-const browser = await chromium.launch();
+// a UTF-8 locale, or the browser's private file system can't store names with accents
+const browser = await chromium.launch({ env: { ...process.env, LC_ALL: 'C.UTF-8' } });
 const p = await browser.newPage({ viewport: { width: 900, height: 700 } });
 p.on('console', (m) => console.log('[page]', m.text()));
 p.on('pageerror', (e) => console.log('[pageerror]', e.message));
@@ -31,6 +32,8 @@ const files = {
   'Zettel/Hiring neural.md': 'Notes about hiring.\n- see [[Project Alpha]] for context\n- also #project/alpha\n',
   'Daily/2026-11-09.md': '- met about [[Project Alpha|the alpha project]]\n',
   '.obsidian/app.json': '{}',
+  // names written with decomposed accents, as on a folder that came from a Mac, three folders deep
+  'Re\u0301sume\u0301s/2026/Q4/Cafe\u0301 plan.md': 'line one\n- booked for [[Project Alpha]] in Lyon\n',
 };
 await p.evaluate(async (files) => {
   const root = await navigator.storage.getDirectory();
@@ -46,6 +49,12 @@ await p.evaluate(async (files) => {
   const work = await root.getDirectoryHandle('Work Notes', { create: true });
   const w2 = await (await work.getFileHandle('Alpha budget.md', { create: true })).createWritable();
   await w2.write('Budget for [[Project Alpha]] is approved.\n'); await w2.close();
+  // a cache left behind by 0.1.0: one record holding a whole vault
+  await new Promise((res) => {
+    const r = indexedDB.open('roam-vaults-cache', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('vaults');
+    r.onsuccess = () => { const tx = r.result.transaction('vaults', 'readwrite'); tx.objectStore('vaults').put({ v: 1, entries: [] }, 'My Vault'); tx.oncomplete = () => { r.result.close(); res(); }; };
+  });
   const picks = [vault, work];
   window.showDirectoryPicker = async () => picks.shift();
   console.log('seeded');
@@ -88,18 +97,19 @@ ok('no Open in Obsidian link on the page itself', !(await p.locator('.rv-panel')
 ok('backlink snippet shown', t1.includes('see [[Project Alpha]] for context'));
 ok('wikilinks keep faint brackets like Roam', (await p.locator('.rv-block .rv-br').count()) > 0 && (await p.locator('.rv-block', { hasText: 'the alpha project' }).locator('.rv-br').count()) === 0);
 ok('daily backlink shown', t1.includes('2026-11-09'));
+ok('a note whose name is not NFC on disk is read for its lines', t1.includes('R\u00e9sum\u00e9s/2026/Q4/Caf\u00e9 plan') && t1.includes('booked for [[Project Alpha]] in Lyon'));
 ok('no palette commands', (await p.evaluate(() => window.__cmds.length)) === 0);
 ok('nothing on the page before a vault is added', emptyPanel);
 ok('settings offers Rescan once a vault exists', (await p.locator('#settings-box button', { hasText: 'Rescan' }).count()) === 1);
 ok('settings tab registered with a vault list', await p.evaluate(() => window.__settings.tabTitle === 'Vaults' && window.__settings.settings[0].action.type === 'reactComponent'));
 await p.waitForFunction(() => document.querySelector('#settings-box')?.textContent.includes('notes'), null, { timeout: 5000 }).catch(() => {});
-ok('settings list shows the vault and its note count', /My Vault3 notes/.test(await p.locator('#settings-box').textContent()));
+ok('settings list shows the vault and its note count', /My Vault4 notes/.test(await p.locator('#settings-box').textContent()));
 ok('one panel only', (await p.locator('.rv-panel').count()) === 1);
 ok('panel sits below Linked References', await p.evaluate(() =>
   document.querySelector('.rm-reference-main').compareDocumentPosition(document.querySelector('.rv-panel')) & Node.DOCUMENT_POSITION_FOLLOWING));
 
 // unfold the matching note inline, and follow a link inside it
-ok('header uses Roam wording, no vault prefix with one vault', t1.includes('3 External Vault References') && !t1.includes('My Vault/'));
+ok('header uses Roam wording, no vault prefix with one vault', t1.includes('4 External Vault References') && !t1.includes('My Vault/'));
 ok('counterpart folded by default', await p.locator('.rv-group').first().locator('.rv-content').evaluate((e) => e.hidden));
 await p.locator('.rv-group-caret').first().click();
 await p.waitForFunction(() => document.querySelector('.rv-preview')?.textContent.includes('Kickoff with'), null, { timeout: 5000 });
@@ -133,18 +143,29 @@ if (process.argv[2]) await p.screenshot({ path: process.argv[2] });
 await p.locator('#settings-box button', { hasText: 'Add vault folder' }).click();
 await p.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('Work Notes/Alpha budget'), null, { timeout: 10000 }).catch(() => {});
 const all = await p.locator('.rv-panel').textContent();
-ok('one fold for both vaults, titles prefixed with vault name', (await p.locator('.rv-sec').count()) === 1 && all.includes('5 External Vault References') && all.includes('My Vault/Projects/Project Alpha') && all.includes('Work Notes/Alpha budget') && all.includes('Budget for'));
+ok('one fold for both vaults, titles prefixed with vault name', (await p.locator('.rv-sec').count()) === 1 && all.includes('6 External Vault References') && all.includes('My Vault/Projects/Project Alpha') && all.includes('Work Notes/Alpha budget') && all.includes('Budget for'));
 if (process.argv[2]) await p.screenshot({ path: process.argv[2].replace(/\.png$/, '-two-vaults.png'), fullPage: true });
-const cacheKeys = () => p.evaluate(() => new Promise((res) => { const r = indexedDB.open('roam-vaults-cache', 1); r.onsuccess = () => { const q = r.result.transaction('vaults').objectStore('vaults').getAllKeys(); q.onsuccess = () => { r.result.close(); res(q.result); }; }; }));
+// the parsed-note cache: one record per note, keyed by [vault id, path]
+const cacheKeys = () => p.evaluate(() => new Promise((res, rej) => {
+  const r = indexedDB.open('roam-vaults-cache');
+  r.onerror = () => rej(r.error);
+  r.onsuccess = () => {
+    const db = r.result, stores = [...db.objectStoreNames];
+    const q = db.transaction('notes').objectStore('notes').getAllKeys();
+    q.onsuccess = () => { db.close(); res({ stores, keys: q.result.map((k) => k.join(' | ')) }); };
+  };
+}));
 await p.waitForTimeout(2500); // let the worker's debounced cache save land
-ok('second vault cached', (await cacheKeys()).includes('Work Notes'));
+const cached = await cacheKeys();
+ok('each note is cached under its vault and path', cached.keys.includes('Work Notes | Alpha budget.md') && cached.keys.includes('My Vault | Projects/Project Alpha.md') && cached.keys.includes('My Vault | Fresh idea.md') && cached.keys.includes('My Vault | R\u00e9sum\u00e9s/2026/Q4/Caf\u00e9 plan.md') && cached.keys.length === 6);
+ok('the single-record cache of 0.1.0 is gone', cached.stores.join() === 'notes');
 ok('settings list shows both vaults', (await p.locator('#settings-box .rv-settings-row').count()) === 2);
 if (process.argv[2]) await p.locator('#settings-box').screenshot({ path: process.argv[2].replace(/\.png$/, '-settings.png') });
 await p.locator('#settings-box .rv-settings-row', { hasText: 'Work Notes' }).locator('button', { hasText: 'Remove' }).click();
 
-ok('remove deletes only that vault\'s cache', await p.waitForFunction(() => true).then(async () => { await p.waitForTimeout(300); const k = await cacheKeys(); return !k.includes('Work Notes') && k.includes('My Vault'); }));
+ok('remove deletes only that vault\'s cache', await p.waitForFunction(() => true).then(async () => { await p.waitForTimeout(300); const { keys } = await cacheKeys(); return !keys.some((k) => k.startsWith('Work Notes | ')) && keys.filter((k) => k.startsWith('My Vault | ')).length === 5; }));
 ok('settings list updates after remove', await p.waitForFunction(() => document.querySelectorAll('#settings-box .rv-settings-row').length === 1, null, { timeout: 3000 }).then(() => true, () => false));
-ok('remove drops only that vault', await p.waitForFunction(() => { const t = document.querySelector('.rv-panel').textContent; return !t.includes('Alpha budget') && t.includes('4 External Vault References') && !t.includes('My Vault/'); }, null, { timeout: 3000 }).then(() => true, () => false));
+ok('remove drops only that vault', await p.waitForFunction(() => { const t = document.querySelector('.rv-panel').textContent; return !t.includes('Alpha budget') && t.includes('5 External Vault References') && !t.includes('My Vault/'); }, null, { timeout: 3000 }).then(() => true, () => false));
 
 // a page no vault note mentions shows nothing, like Roam's own empty reference sections
 await p.evaluate(() => { window.roamAlphaAPI.pull = () => ({ ':node/title': 'Nothing Mentions This' }); window.dispatchEvent(new HashChangeEvent('hashchange')); });

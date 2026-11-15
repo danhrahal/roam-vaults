@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+Uses much less memory, most of all with large vaults.
+
+- The extension no longer keeps a file handle open for every note. Each one cost memory in Roam's main
+  process as well as in the page.
+- Scanning a vault, at start and on Rescan, no longer piles up file handles until the browser gets round
+  to freeing them, which was the largest spike.
+- The link index is several times smaller: it keeps each link's target and line instead of an object per
+  link, and resolves links when a page asks for them.
+- The cache of parsed notes is stored one note at a time, so an edit writes one small record instead of
+  rewriting the whole vault's cache, and a rescan no longer reloads it. The first start after updating
+  reads every note once to build the new cache.
+- Note text kept for the lines under a page is capped at about a megabyte, and page results at the 50
+  most recently viewed pages per vault.
+- Pages are no longer redrawn for every progress step of a scan.
+- Notes with the same title are listed in a fixed order, by path.
+
 ## 0.1.0 (2026-11-09)
 
 First release of Vaults: see notes from your Obsidian-style vaults in your Roam graph.

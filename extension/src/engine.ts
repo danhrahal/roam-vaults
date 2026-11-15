@@ -1,10 +1,10 @@
 // Vault engine: scan a vault through an abstract file system, keep the index up to
 // date, and answer "what in the vault relates to this Roam page?". No DOM, no Node
 // APIs, so it runs in the Web Worker and in Node tests alike.
-import { parseNote } from './core/parser.ts';
-import { VaultIndex } from './core/vault-index.ts';
+import { parseNote, clearInterned } from './core/parser.ts';
+import { VaultIndex, toNote } from './core/vault-index.ts';
 import { RoamMatcher, type NoteHow } from './core/matcher.ts';
-import type { ParsedNote } from './core/types.ts';
+import type { Note } from './core/types.ts';
 
 export interface FileMeta { path: string; size: number; mtime: number }
 export interface VaultFS {
@@ -14,8 +14,8 @@ export interface VaultFS {
   /** Metadata for one path, or null if it no longer exists. */
   stat(path: string): Promise<FileMeta | null>;
 }
-export interface CacheEntry { size: number; mtime: number; note: ParsedNote }
-export type Cache = Map<string, CacheEntry>;
+/** Notes from an earlier scan, by path. A note is used again while its file's size and time match. */
+export type Cache = Map<string, Note>;
 
 export interface Counterpart { path: string; title: string; how: NoteHow; label: string }
 export interface BacklinkLine { line: number; text: string; embed: boolean; unresolved: boolean }
@@ -43,16 +43,24 @@ const MD = /\.md$/i;
 export const noteTitle = (path: string) => path.slice(path.lastIndexOf('/') + 1).replace(MD, '');
 const MAX_LINE = 240;
 const MAX_BACKLINK_NOTES = 200;
+/** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
+const MAX_TEXT_CHARS = 1_000_000;
+const READS_AT_ONCE = 16;
 
 export class VaultEngine {
   idx = new VaultIndex();
   matcher!: RoamMatcher;
-  cache: Cache = new Map();
-  private lines = new Map<string, string[]>(); // small LRU of split file texts, for snippets
+  /** Notes that changed and paths that went away (null) since the cache was last written. */
+  unsaved = new Map<string, Note | null>();
+  private texts = new Map<string, string>(); // recently read note texts, oldest first, for snippets
+  private textChars = 0;
 
   private fs: VaultFS;
   private dailyFormats: string[];
   constructor(fs: VaultFS, dailyFormats: string[] = ['YYYY-MM-DD']) { this.fs = fs; this.dailyFormats = dailyFormats; }
+
+  /** The parsed notes, for the next scan to start from. */
+  get cache(): Cache { return this.idx.notes; }
 
   /** Full scan. Files whose size and mtime match the cache are not re-read. */
   async build(cache: Cache = new Map(), onProgress?: (done: number, total: number) => void, concurrency = 32): Promise<BuildStats> {
@@ -60,20 +68,21 @@ export class VaultEngine {
     const all = await this.fs.list();
     const md = all.filter((f) => MD.test(f.path));
     const other = all.filter((f) => !MD.test(f.path)).map((f) => f.path);
-    const notes: ParsedNote[] = new Array(md.length);
+    const notes: Note[] = new Array(md.length);
     const errors: string[] = [];
-    const next: Cache = new Map();
+    const unsaved = new Map<string, Note | null>();
     let reread = 0, done = 0, i = 0;
     const work = async () => {
       while (i < md.length) {
         const k = i++, f = md[k];
         const c = cache.get(f.path);
-        if (c && c.size === f.size && c.mtime === f.mtime) notes[k] = c.note;
+        if (c && c.size === f.size && c.mtime === f.mtime) notes[k] = c;
         else {
-          try { notes[k] = parseNote(f.path, await this.fs.readText(f.path)); reread++; }
-          catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
+          try {
+            unsaved.set(f.path, notes[k] = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime));
+            reread++;
+          } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
         }
-        if (notes[k]) next.set(f.path, { size: f.size, mtime: f.mtime, note: notes[k] });
         if (++done % 50 === 0) onProgress?.(done, md.length);
       }
     };
@@ -82,9 +91,12 @@ export class VaultEngine {
     this.idx = new VaultIndex();
     this.idx.preferNearby = true;
     this.idx.build(ok, other);
-    this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats });
-    this.cache = next;
-    this.lines.clear();
+    // Only the strong matches are shown, so the weaker lookup tables are not built.
+    this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats, sanitized: false });
+    for (const path of cache.keys()) if (!this.idx.notes.has(path)) unsaved.set(path, null);
+    this.unsaved = unsaved;
+    this.texts.clear(); this.textChars = 0;
+    clearInterned();
     onProgress?.(md.length, md.length);
     return { notes: ok.length, files: all.length, reread, cached: ok.length - reread, errors, ms: Date.now() - t0 };
   }
@@ -93,23 +105,24 @@ export class VaultEngine {
   async refresh(paths: string[]): Promise<boolean> {
     let changed = false;
     for (const path of new Set(paths)) {
-      this.lines.delete(path);
+      this.forget(path);
       const meta = await this.fs.stat(path).catch(() => null);
       const known = this.idx.files.has(path);
       if (!meta) {
-        if (known) { this.idx.removeFile(path); this.cache.delete(path); changed = true; }
+        if (known) { this.idx.removeFile(path); if (MD.test(path)) this.unsaved.set(path, null); changed = true; }
         continue;
       }
       if (!MD.test(path)) { if (!known) { this.idx.addAttachment(path); changed = true; } continue; }
-      const c = this.cache.get(path);
-      if (known && c && c.size === meta.size && c.mtime === meta.mtime) continue;
+      const c = this.idx.notes.get(path);
+      if (c && c.size === meta.size && c.mtime === meta.mtime) continue;
       try {
-        const note = parseNote(path, await this.fs.readText(path));
+        const note = toNote(parseNote(path, await this.fs.readText(path)), meta.size, meta.mtime);
         this.idx.upsertNote(note);
-        this.cache.set(path, { size: meta.size, mtime: meta.mtime, note });
+        this.unsaved.set(path, note);
         changed = true;
       } catch { /* half-written or placeholder file: the next event will retry */ }
     }
+    clearInterned();
     return changed;
   }
 
@@ -130,18 +143,20 @@ export class VaultEngine {
       if (arr.some((x) => x.line === l.line)) continue;
       arr.push({ line: l.line, text: '', embed: l.embed, unresolved: l.via !== 'backlink' });
     }
-    const srcs = [...bySrc.keys()].sort((x, y) => noteTitle(x).localeCompare(noteTitle(y))).slice(0, MAX_BACKLINK_NOTES);
-    const backlinks: Backlink[] = [];
-    for (const src of srcs) {
-      const lines = bySrc.get(src)!.sort((x, y) => x.line - y.line);
-      const text = await this.fileLines(src);
-      for (const l of lines) l.text = snippet(text?.[l.line] ?? '');
-      backlinks.push({ path: src, title: noteTitle(src), lines });
+    const srcs = [...bySrc.keys()]
+      .sort((x, y) => noteTitle(x).localeCompare(noteTitle(y)) || (x < y ? -1 : x > y ? 1 : 0))
+      .slice(0, MAX_BACKLINK_NOTES);
+    const backlinks: Backlink[] = srcs.map((src) => ({ path: src, title: noteTitle(src), lines: bySrc.get(src)!.sort((x, y) => x.line - y.line) }));
+    for (let i = 0; i < backlinks.length; i += READS_AT_ONCE) {
+      await Promise.all(backlinks.slice(i, i + READS_AT_ONCE).map(async (b) => {
+        const text = await this.text(b.path);
+        if (text !== null) for (const l of b.lines) l.text = snippet(lineAt(text, l.line));
+      }));
     }
     const seenTag = new Set<string>();
     const tagged: Tagged[] = [];
     for (const t of a.tagged) if (!seenTag.has(t.path)) { seenTag.add(t.path); tagged.push({ path: t.path, title: noteTitle(t.path), tag: t.tag }); }
-    tagged.sort((x, y) => x.title.localeCompare(y.title));
+    tagged.sort((x, y) => x.title.localeCompare(y.title) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
     return { title, counterparts, backlinks, tagged };
   }
 
@@ -152,14 +167,32 @@ export class VaultEngine {
     return this.idx.candidates(target, from).find((p) => MD.test(p)) ?? null;
   }
 
-  private async fileLines(path: string): Promise<string[] | null> {
-    let l = this.lines.get(path);
-    if (l) { this.lines.delete(path); this.lines.set(path, l); return l; }
-    try { l = (await this.fs.readText(path)).split('\n'); } catch { return null; }
-    this.lines.set(path, l);
-    if (this.lines.size > 300) this.lines.delete(this.lines.keys().next().value!);
-    return l;
+  /** A note's text, from the few most recently read ones or from disk. */
+  private async text(path: string): Promise<string | null> {
+    let t = this.texts.get(path);
+    if (t !== undefined) { this.texts.delete(path); this.texts.set(path, t); return t; }
+    try { t = await this.fs.readText(path); } catch { return null; }
+    if (t.length > MAX_TEXT_CHARS / 4) return t; // too big to be worth a quarter of the budget
+    this.forget(path); // another read of the same note may have finished meanwhile
+    this.texts.set(path, t); this.textChars += t.length;
+    for (const [old, text] of this.texts) {
+      if (this.textChars <= MAX_TEXT_CHARS) break;
+      this.texts.delete(old); this.textChars -= text.length;
+    }
+    return t;
   }
+  private forget(path: string) {
+    const t = this.texts.get(path);
+    if (t !== undefined) { this.texts.delete(path); this.textChars -= t.length; }
+  }
+}
+
+/** One line of a text, without its line break. */
+function lineAt(text: string, line: number): string {
+  let s = 0;
+  for (let i = 0; i < line; i++) { s = text.indexOf('\n', s) + 1; if (s === 0) return ''; }
+  const e = text.indexOf('\n', s);
+  return text.slice(s, e < 0 ? text.length : e);
 }
 
 function snippet(line: string): string {

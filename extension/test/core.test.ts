@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseNote } from '../src/core/parser.ts';
-import { VaultIndex } from '../src/core/vault-index.ts';
+import { VaultIndex, toNote } from '../src/core/vault-index.ts';
 import { RoamMatcher } from '../src/core/matcher.ts';
 import { roamDailyToIso, compileFormat, parseWithFormat, formatIso } from '../src/core/dates.ts';
 
@@ -64,25 +64,45 @@ test('parser extracts expected links and skips code/comments', () => {
   assert.ok(n.headings[0].text === 'Title');
 });
 
+const note = (path: string, text: string) => toNote(parseNote(path, text));
+
+test('the index keeps a note as its path, aliases, tags and link targets with their lines', () => {
+  const n = toNote(parseNote('folder/My Note.md', doc), 123, 456);
+  assert.deepEqual(Object.keys(n).sort(), ['aliases', 'links', 'mtime', 'path', 'size', 'tags']);
+  assert.deepEqual([n.path, n.size, n.mtime], ['folder/My Note.md', 123, 456]);
+  assert.deepEqual(n.aliases, ['Alpha Project', 'What is X?']);
+  const at = (target: string) => { const i = n.links.indexOf(target); return i < 0 ? undefined : n.links[i + 1]; };
+  assert.equal(at('Beta'), 5 * 2);          // frontmatter link on line 5
+  assert.equal(at('Note'), 13 * 2 + 1);     // ![[Note]] is an embed on line 13
+  assert.ok(!n.links.includes(''), 'links to the note itself are left out');
+  assert.equal(n.links.length % 2, 0);
+});
+
 test('resolver: case-insensitive, path-qualified, duplicates, attachments, incremental', () => {
   const idx = new VaultIndex();
   const notes = [
-    parseNote('A/Note.md', 'link [[note]] [[B/Note]] [[Missing]] ![[pic.png]] [[Other.md]]'),
-    parseNote('B/Note.md', '[[Note]]'),
-    parseNote('Other.md', '[[a/note]] [x](./A/Note.md)'),
+    note('A/Note.md', 'link [[note]] [[B/Note]] [[Missing]] ![[pic.png]] [[Other.md]]'),
+    note('B/Note.md', '[[Note]]'),
+    note('Other.md', '[[a/note]] [x](./A/Note.md)'),
   ];
   idx.build(notes, ['assets/pic.png']);
-  const out = idx.outgoing.get('A/Note.md')!.map((r) => r.resolved);
-  assert.deepEqual(out, ['A/Note.md', 'B/Note.md', null, 'assets/pic.png', 'Other.md']);
-  assert.equal(idx.outgoing.get('B/Note.md')![0].resolved, 'B/Note.md'); // same folder wins
-  assert.deepEqual(idx.outgoing.get('Other.md')!.map((r) => r.resolved), ['A/Note.md', 'A/Note.md']);
-  assert.equal(idx.unresolved.get('missing')!.size, 1);
-  const n = idx.upsertNote(parseNote('Z/Missing.md', 'hi'));
-  assert.equal(n, 1);
-  assert.equal(idx.unresolved.get('missing'), undefined);
-  assert.equal(idx.backlinks.get('Z/Missing.md')!.size, 1);
+  assert.deepEqual(idx.outgoing('A/Note.md'), ['A/Note.md', 'B/Note.md', null, 'assets/pic.png', 'Other.md']);
+  assert.deepEqual(idx.outgoing('B/Note.md'), ['B/Note.md']); // same folder wins
+  assert.deepEqual(idx.outgoing('Other.md'), ['A/Note.md', 'A/Note.md']);
+  assert.deepEqual(idx.backlinks(['A/Note.md']).map((h) => [h.src, h.line, h.embed]), [['Other.md', 0, false], ['Other.md', 0, false]]);
+  assert.deepEqual(idx.backlinks(['assets/pic.png']).map((h) => [h.src, h.embed]), [['A/Note.md', true]]);
+  assert.deepEqual(idx.unresolved('missing').map((h) => h.src), ['A/Note.md']);
+  idx.upsertNote(note('Z/Missing.md', 'hi'));
+  assert.equal(idx.unresolved('missing').length, 0);
+  assert.deepEqual(idx.backlinks(['Z/Missing.md']).map((h) => h.src), ['A/Note.md']);
   idx.removeFile('Z/Missing.md');
-  assert.equal(idx.unresolved.get('missing')!.size, 1);
+  assert.equal(idx.unresolved('missing').length, 1);
+  assert.equal(idx.backlinks(['Z/Missing.md']).length, 0);
+  // an edited note stops counting for the links it no longer has
+  idx.upsertNote(note('A/Note.md', 'only [[Other]] now'));
+  assert.equal(idx.unresolved('missing').length, 0);
+  assert.deepEqual(idx.backlinks(['Other.md']).map((h) => h.src), ['A/Note.md']);
+  assert.ok(!idx.linkers.has('missing') && !idx.linkers.has('pic.png'));
 });
 
 test('dates', () => {
@@ -104,11 +124,11 @@ test('a date format with an unclosed [ is read literally instead of looping fore
 test('matcher tiers', () => {
   const idx = new VaultIndex();
   idx.build([
-    parseNote('Projects/Alpha.md', '---\naliases: [Alpha Project]\n---\n'),
-    parseNote('What is X.md', ''),
-    parseNote('Daily/2026-11-05.md', 'met [[Ridley Scott]] about [[Projects/Alpha]] and [[What is X?]] #project-alpha'),
-    parseNote('Projects-Beta.md', ''),
-    parseNote('café.md', ''),
+    note('Projects/Alpha.md', '---\naliases: [Alpha Project]\n---\n'),
+    note('What is X.md', ''),
+    note('Daily/2026-11-05.md', 'met [[Ridley Scott]] about [[Projects/Alpha]] and [[What is X?]] #project-alpha'),
+    note('Projects-Beta.md', ''),
+    note('café.md', ''),
   ], []);
   const m = new RoamMatcher(idx, { dailyFormats: ['YYYY-MM-DD'] });
   const a = m.associations('Projects/Alpha');

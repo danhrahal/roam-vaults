@@ -1,6 +1,7 @@
 // Vaults: shows notes from Obsidian-style vaults (local Markdown folders) that match or
 // link to the Roam page you are on. Read-only; nothing is written to the graph; no network.
-import { loadVaults, saveVaults, deleteCache } from './store.ts';
+import { loadVaults, saveVaults } from './store.ts';
+import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { createSettingsPanel, type SettingsVault } from './settings.ts';
 import { ATTR, installStyles, renderPanel, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
@@ -11,6 +12,7 @@ declare global { interface Window { roamAlphaAPI: any } }
 
 // ---------- one connected vault: its own indexer worker ----------
 let workerUrl = '';
+const MAX_RESULTS = 50; // page results kept per vault; the least recently used goes first
 class Vault implements PanelVault {
   id: string; handle: FileSystemDirectoryHandle; name: string;
   state: SectionState = { kind: 'indexing', detail: '' };
@@ -62,7 +64,14 @@ class Vault implements PanelVault {
     this.waiting.clear();
     waiting.forEach((w) => w.rej(e));
   }
-  set(s: SectionState) { if (this.stopped) return; this.state = s; this.stale(); refreshAll(); changed(); }
+  set(s: SectionState) {
+    if (this.stopped) return;
+    // Progress of a scan only shows in settings: pages have nothing to redraw for it.
+    const progress = s.kind === 'indexing' && this.state.kind === 'indexing';
+    this.state = s;
+    if (!progress) { this.stale(); refreshAll(); }
+    changed();
+  }
   private onStatus(s: string, detail: string, live: boolean, notLiveWhy: string) {
     if (s === 'indexing') this.set({ kind: 'indexing', detail });
     else if (s === 'error') this.set({ kind: 'error', detail });
@@ -89,10 +98,14 @@ class Vault implements PanelVault {
   async query(title: string): Promise<PageResult | null> {
     if (this.state.kind !== 'ready') return null;
     let r = this.results.get(title);
-    if (r === undefined) {
+    if (r !== undefined) { this.results.delete(title); this.results.set(title, r); } // most recently used last
+    else {
       const gen = this.gen;
       r = await this.call<PageResult | null>('query', { title }).catch(() => null);
-      if (gen === this.gen) this.results.set(title, r); // an answer from before a change is not kept
+      if (gen === this.gen) { // an answer from before a change is not kept
+        this.results.set(title, r);
+        if (this.results.size > MAX_RESULTS) this.results.delete(this.results.keys().next().value!);
+      }
     }
     return r;
   }
@@ -137,7 +150,7 @@ async function addVault() {
   await save();
   await v.connect(false);
 }
-const dropCache = (v: Vault) => deleteCache(v.id).catch((e) => console.warn('[roam-vaults] cache not cleared', e));
+const dropCache = (v: Vault) => deleteNotes(v.id).catch((e) => console.warn('[roam-vaults] cache not cleared', e));
 async function removeVault(v: Vault) {
   v.stop(); // terminates the worker first, so no pending cache save can recreate the entry
   await dropCache(v);

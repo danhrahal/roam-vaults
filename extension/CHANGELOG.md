@@ -16,6 +16,8 @@ Uses much less memory, most of all with large vaults.
 - Note text kept for the lines under a page is capped at about a megabyte, and page results at the 50
   most recently viewed pages per vault.
 - Pages are no longer redrawn for every progress step of a scan.
+- Only one scan of a vault runs at a time. Clicking Rescan while one is running queues a single scan
+  after it, instead of starting another alongside it with its own copy of the index.
 - Notes with the same title are listed in a fixed order, by path.
 
 ## 0.1.0 (2026-11-09)

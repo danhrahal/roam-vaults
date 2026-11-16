@@ -242,6 +242,44 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   ok('Reconnect and Remove stay inside the settings column', (await fits(q, 670)).inside && (await fits(q, 450)).inside && (await fits(q, 285)).inside);
   await q.context().close();
 }
+{ // a scan that never finished (Roam ran out of memory) is not started again on load
+  const q = await fresh();
+  await q.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    // A handle read back from IndexedDB crashes headless Chromium, so the saved list is handed over directly.
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (key) { return key === 'vaults' ? { result: [{ id: 'My Vault', handle: vault }] } : get.call(this, key); };
+    localStorage.setItem('roam-vaults:scanning:My Vault', '1');
+    window.__ext.onload({ extensionAPI: window.__api });
+  });
+  await mountSettings(q);
+  ok('a vault whose last scan never finished waits instead of scanning on load', await rowHas(q, "Last scan didn't finish"));
+  // the Rescan for all vaults leaves it alone too
+  await q.evaluate(() => [...document.querySelectorAll('.rv-settings-actions button')].find((b) => b.textContent === 'Rescan').click());
+  await q.waitForTimeout(800);
+  const t = await row(q);
+  ok('it is not scanned, and nothing shows on the page', t.includes("Last scan didn't finish") && !/\d+ notes?/.test(t) && !(await q.evaluate(() => document.querySelector('.rv-panel')?.textContent.trim())));
+  ok('its row has Rescan and Remove inside the settings column', (await q.locator('.rv-settings-btns button').allTextContents()).join() === 'Rescan,Remove' && (await fits(q, 670)).inside && (await fits(q, 285)).inside);
+  await q.evaluate(() => document.querySelector('.rv-settings-btns button').click());
+  ok('its Rescan scans it and clears the mark', await rowHas(q, '1 note') && await q.evaluate(() => localStorage.getItem('roam-vaults:scanning:My Vault') === null));
+  await q.context().close();
+}
+{ // the mark is set while a scan runs and cleared when it ends
+  const q = await fresh();
+  await q.evaluate(() => {
+    window.__marks = [];
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k, v) { if (k.startsWith('roam-vaults:')) window.__marks.push(k); return set.call(this, k, v); };
+    return window.__ext.onload({ extensionAPI: window.__api });
+  });
+  await mountSettings(q);
+  await press(q, 'Add vault folder');
+  await rowHas(q, '1 note');
+  await q.waitForTimeout(300);
+  ok('a scan marks the vault while it runs and clears the mark when done', await q.evaluate(() =>
+    window.__marks.includes('roam-vaults:scanning:My Vault') && localStorage.getItem('roam-vaults:scanning:My Vault') === null));
+  await q.context().close();
+}
 { // a scan that fails says so instead of staying on "Indexing"
   const q = await fresh();
   await q.evaluate(() => window.__ext.onload({ extensionAPI: window.__api }));

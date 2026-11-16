@@ -10,6 +10,17 @@ import type { PageResult } from '../engine.ts';
 declare const WORKER_SOURCE: string; // injected by build.mjs
 declare global { interface Window { roamAlphaAPI: any } }
 
+// ---------- scans that never finished ----------
+// The indexer runs in Roam's own process, so a scan that runs out of memory takes Roam down with it.
+// Every vault is scanned on load, so that scan would crash Roam again on every launch. A mark is kept
+// on this device while a scan runs; a vault whose mark is still there on load waits for Rescan.
+// localStorage, because it is written at once: a crash can come before an IndexedDB write lands.
+const scanMark = (id: string) => `roam-vaults:scanning:${id}`;
+function hasScanMark(id: string) { try { return localStorage.getItem(scanMark(id)) !== null; } catch { return false; } }
+function setScanMark(id: string, on: boolean) {
+  try { if (on) localStorage.setItem(scanMark(id), '1'); else localStorage.removeItem(scanMark(id)); } catch { /* storage blocked: no guard */ }
+}
+
 // ---------- one connected vault: its own indexer worker ----------
 let workerUrl = '';
 const MAX_RESULTS = 50; // page results kept per vault; the least recently used goes first
@@ -24,6 +35,7 @@ class Vault implements PanelVault {
   private gen = 0;        // goes up whenever cached results go stale
   private opened = false; // has the worker been given the folder?
   private stopped = false;
+  private marked = false; // is this vault's scan mark set?
 
   constructor(id: string, handle: FileSystemDirectoryHandle) {
     this.id = id; this.handle = handle; this.name = handle.name;
@@ -69,6 +81,7 @@ class Vault implements PanelVault {
     // Progress of a scan only shows in settings: pages have nothing to redraw for it.
     const progress = s.kind === 'indexing' && this.state.kind === 'indexing';
     this.state = s;
+    this.mark(s.kind === 'indexing' || s.kind === 'unfinished');
     if (!progress) { this.stale(); refreshAll(); }
     changed();
   }
@@ -80,6 +93,10 @@ class Vault implements PanelVault {
       if (!live) console.warn('[roam-vaults]', this.name, 'no live updates:', notLiveWhy);
       this.set({ kind: 'ready', result: null, live });
     }
+  }
+  /** Set or clear the scan mark (see hasScanMark). */
+  mark(on: boolean) {
+    if (on !== this.marked) { this.marked = on; setScanMark(this.id, on); }
   }
   async connect(ask: boolean) {
     let allowed = false;
@@ -120,7 +137,7 @@ class Vault implements PanelVault {
     a.rel = 'noopener';
     a.click();
   }
-  stop() { this.stopped = true; this.worker.terminate(); this.fail(new Error('The vault was removed.')); }
+  stop() { this.mark(false); this.stopped = true; this.worker.terminate(); this.fail(new Error('The vault was removed.')); }
 }
 
 let vaults: Vault[] = [];
@@ -130,10 +147,11 @@ function changed() { listeners.forEach((fn) => fn()); }
 function settingsVault(v: Vault): SettingsVault {
   const s = v.state;
   const status = s.kind === 'permission' ? 'Needs permission again'
+    : s.kind === 'unfinished' ? "Last scan didn't finish"
     : s.kind === 'indexing' ? `Indexing${s.detail ? ` ${s.detail}` : '…'}`
     : s.kind === 'error' ? `Couldn't read: ${s.detail}`
     : `${v.notes || 'Ready'}${s.live ? '' : ' · not live'}`;
-  return { id: v.id, name: v.name, status, needsPermission: s.kind === 'permission', reconnect: () => v.connect(true), remove: () => removeVault(v) };
+  return { id: v.id, name: v.name, status, needsPermission: s.kind === 'permission', unfinished: s.kind === 'unfinished', reconnect: () => v.connect(true), remove: () => removeVault(v) };
 }
 const save = () => { changed(); return saveVaults(vaults.map((v) => ({ id: v.id, handle: v.handle }))).catch((e) => console.warn('[roam-vaults]', e)); };
 
@@ -242,6 +260,10 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
   const mo = new MutationObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(inject); });
   mo.observe(document.body, { childList: true, subtree: true });
   cleanups.push(() => { mo.disconnect(); cancelAnimationFrame(frame); });
+  // Closing or reloading Roam mid-scan isn't a crash: the scan starts again next time as usual.
+  const onHide = () => vaults.forEach((v) => { if (v.state.kind === 'indexing') v.mark(false); });
+  window.addEventListener('pagehide', onHide);
+  cleanups.push(() => window.removeEventListener('pagehide', onHide));
   const onHash = () => requestAnimationFrame(inject);
   window.addEventListener('hashchange', onHash);
   cleanups.push(() => window.removeEventListener('hashchange', onHash));
@@ -249,9 +271,10 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
   const saved = await loadVaults().catch(() => []);
   if (load !== loads) return; // unloaded while the saved vaults were being read
   vaults = saved.map((x) => new Vault(x.id, x.handle));
+  for (const v of vaults) if (hasScanMark(v.id)) v.set({ kind: 'unfinished' });
   changed();
   inject();
-  await Promise.all(vaults.map((v) => v.connect(false)));
+  await Promise.all(vaults.map((v) => v.state.kind === 'unfinished' ? null : v.connect(false)));
 }
 
 function onunload() {

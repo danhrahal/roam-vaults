@@ -88,7 +88,10 @@ Everything is in **Settings → Roam Depot → Vaults**:
   The page itself never shows indexing or permission notices.
 - **Remove** forgets that vault on this computer and deletes its cache. Your files aren't touched.
 - **Reconnect** appears when Roam needs your permission again to read a vault.
-- **Rescan** reads every vault again. Only changed files are parsed.
+- "Last scan didn't finish" means Roam crashed while reading that vault, for example because it ran
+  out of memory on a very large folder. So that Roam stays usable, the vault isn't read again until you
+  click the **Rescan** in its row. If it keeps happening, remove it or choose a smaller folder.
+- **Rescan** reads every vault again, except one whose last scan didn't finish. Only changed files are parsed.
 
 Vaults adds no commands to the command palette.
 

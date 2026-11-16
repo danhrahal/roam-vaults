@@ -714,7 +714,7 @@ function renderSettings(el, m) {
         h(
           "div",
           { class: "rv-settings-btns" },
-          v.needsPermission ? btn("Reconnect", v.reconnect, "bp3-intent-primary") : null,
+          v.needsPermission ? btn("Reconnect", v.reconnect, "bp3-intent-primary") : v.unfinished ? btn("Rescan", v.reconnect, "bp3-intent-primary") : null,
           btn("Remove", v.remove, "bp3-minimal")
         )
       ))) : null,
@@ -756,6 +756,21 @@ function createSettingsPanel(extensionAPI, m) {
 }
 
 // src/main/index.ts
+var scanMark = (id) => `roam-vaults:scanning:${id}`;
+function hasScanMark(id) {
+  try {
+    return localStorage.getItem(scanMark(id)) !== null;
+  } catch {
+    return false;
+  }
+}
+function setScanMark(id, on) {
+  try {
+    if (on) localStorage.setItem(scanMark(id), "1");
+    else localStorage.removeItem(scanMark(id));
+  } catch {
+  }
+}
 var workerUrl = "";
 var MAX_RESULTS = 50;
 var Vault = class {
@@ -773,6 +788,8 @@ var Vault = class {
   opened = false;
   // has the worker been given the folder?
   stopped = false;
+  marked = false;
+  // is this vault's scan mark set?
   constructor(id, handle) {
     this.id = id;
     this.handle = handle;
@@ -829,6 +846,7 @@ var Vault = class {
     if (this.stopped) return;
     const progress = s.kind === "indexing" && this.state.kind === "indexing";
     this.state = s;
+    this.mark(s.kind === "indexing" || s.kind === "unfinished");
     if (!progress) {
       this.stale();
       refreshAll();
@@ -842,6 +860,13 @@ var Vault = class {
       this.notes = detail;
       if (!live) console.warn("[roam-vaults]", this.name, "no live updates:", notLiveWhy);
       this.set({ kind: "ready", result: null, live });
+    }
+  }
+  /** Set or clear the scan mark (see hasScanMark). */
+  mark(on) {
+    if (on !== this.marked) {
+      this.marked = on;
+      setScanMark(this.id, on);
     }
   }
   async connect(ask) {
@@ -893,6 +918,7 @@ var Vault = class {
     a.click();
   }
   stop() {
+    this.mark(false);
     this.stopped = true;
     this.worker.terminate();
     this.fail(new Error("The vault was removed."));
@@ -905,8 +931,8 @@ function changed() {
 }
 function settingsVault(v) {
   const s = v.state;
-  const status = s.kind === "permission" ? "Needs permission again" : s.kind === "indexing" ? `Indexing${s.detail ? ` ${s.detail}` : "\u2026"}` : s.kind === "error" ? `Couldn't read: ${s.detail}` : `${v.notes || "Ready"}${s.live ? "" : " \xB7 not live"}`;
-  return { id: v.id, name: v.name, status, needsPermission: s.kind === "permission", reconnect: () => v.connect(true), remove: () => removeVault(v) };
+  const status = s.kind === "permission" ? "Needs permission again" : s.kind === "unfinished" ? "Last scan didn't finish" : s.kind === "indexing" ? `Indexing${s.detail ? ` ${s.detail}` : "\u2026"}` : s.kind === "error" ? `Couldn't read: ${s.detail}` : `${v.notes || "Ready"}${s.live ? "" : " \xB7 not live"}`;
+  return { id: v.id, name: v.name, status, needsPermission: s.kind === "permission", unfinished: s.kind === "unfinished", reconnect: () => v.connect(true), remove: () => removeVault(v) };
 }
 var save = () => {
   changed();
@@ -1022,15 +1048,21 @@ async function onload({ extensionAPI }) {
     mo.disconnect();
     cancelAnimationFrame(frame);
   });
+  const onHide = () => vaults.forEach((v) => {
+    if (v.state.kind === "indexing") v.mark(false);
+  });
+  window.addEventListener("pagehide", onHide);
+  cleanups.push(() => window.removeEventListener("pagehide", onHide));
   const onHash = () => requestAnimationFrame(inject);
   window.addEventListener("hashchange", onHash);
   cleanups.push(() => window.removeEventListener("hashchange", onHash));
   const saved = await loadVaults().catch(() => []);
   if (load !== loads) return;
   vaults = saved.map((x) => new Vault(x.id, x.handle));
+  for (const v of vaults) if (hasScanMark(v.id)) v.set({ kind: "unfinished" });
   changed();
   inject();
-  await Promise.all(vaults.map((v) => v.connect(false)));
+  await Promise.all(vaults.map((v) => v.state.kind === "unfinished" ? null : v.connect(false)));
 }
 function onunload() {
   loads++;

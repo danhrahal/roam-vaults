@@ -22,6 +22,10 @@ Uses much less memory, most of all with large vaults.
 - Only one scan of a vault runs at a time. Clicking Rescan while one is running queues a single scan
   after it, instead of starting another alongside it with its own copy of the index.
 - Notes with the same title are listed in a fixed order, by path.
+- A folder created, deleted, moved or renamed inside a vault no longer rescans the whole vault. Only that
+  folder is read, and a moved folder's notes aren't read again. Vaults that tools write new folders into
+  all day stay cheap to watch ([#8](https://github.com/sweenzor/roam-vaults/issues/8)).
+- A note or folder moved into a hidden folder such as `.trash` now disappears from the page right away.
 
 ## 0.1.0 (2026-11-09)
 

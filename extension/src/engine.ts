@@ -8,7 +8,7 @@ import type { Note } from './core/types.ts';
 
 export interface FileMeta { path: string; size: number; mtime: number }
 export interface VaultFS {
-  /** Every file in the vault, '/'-separated paths relative to the root, dot-folders skipped. */
+  /** Every file in the vault, '/'-separated paths relative to the root, dot-folders and ignored paths skipped. */
   list(): Promise<FileMeta[]>;
   readText(path: string): Promise<string>;
   /** Metadata for one path, or null if it no longer exists. */

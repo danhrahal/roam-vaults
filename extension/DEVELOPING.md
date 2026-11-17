@@ -46,6 +46,11 @@ Roam Depot tab.
 - Folder handles are kept in this device's IndexedDB, never in Roam settings, which sync through the graph.
 - `FileSystemObserver` watches the folder, so edits made in Obsidian or any editor show up within a second.
 - Daily notes use the format in `.obsidian/daily-notes.json`, falling back to `YYYY-MM-DD`.
+- The scan skips dot-folders, paths matched by the vault's `.gitignore` files (git's rules, through the
+  `ignore` package, nearest file decides) and Obsidian's Excluded files (`userIgnoreFilters` in
+  `.obsidian/app.json`: a plain entry is a path prefix, `/.../` a regular expression tested against file
+  paths). Ignored folders are never opened. The watcher drops events under them, and a change to a
+  `.gitignore`, `app.json` or `daily-notes.json` rescans. See `src/core/ignore.ts`.
 - CSS classes are prefixed `rv-`, and every DOM node the extension adds carries a data attribute, so
   `onunload` can remove all of them.
 

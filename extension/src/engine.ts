@@ -61,6 +61,8 @@ const MAX_FUZZY = 5;
 /** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
 const MAX_TEXT_CHARS = 1_000_000;
 const READS_AT_ONCE = 16;
+/** Notes written to an index kept in place per call, during a scan. */
+const BATCH = 200;
 
 export class VaultEngine {
   idx = new VaultIndex();
@@ -138,14 +140,19 @@ export class VaultEngine {
     const md = all.filter((f) => MD.test(f.path));
     const errors: string[] = [];
     let reread = 0, done = 0, i = 0, ok = 0;
+    let stamps: Map<string, { size: number; mtime: number }> | null = idx.stamps();
+    // Read notes are written in batches: a database call costs much more than a row.
+    let batch: Note[] = [];
     const work = async () => {
       while (i < md.length) {
         const f = md[i++];
-        const c = idx.stampOf(f.path);
+        const c = stamps!.get(f.path);
         if (c && c.size === f.size && c.mtime === f.mtime) ok++;
         else {
           try {
-            idx.upsertNote(toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime));
+            const text = await this.fs.readText(f.path); // before batch is read: it may be replaced meanwhile
+            batch.push(toNote(parseNote(f.path, text), f.size, f.mtime));
+            if (batch.length >= BATCH) { idx.upsertNotes(batch); batch = []; }
             reread++; ok++;
           } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
         }
@@ -154,6 +161,8 @@ export class VaultEngine {
     };
     try {
       await Promise.all(Array.from({ length: Math.min(concurrency, md.length || 1) }, work));
+      stamps = null;
+      idx.upsertNotes(batch); batch = [];
       const seen = new Set<string>();
       for (const f of all) {
         seen.add(f.path);

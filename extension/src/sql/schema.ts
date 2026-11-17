@@ -21,9 +21,11 @@ export const MIGRATIONS: ((db: Db) => void)[] = [
       aliases TEXT NOT NULL, tags TEXT NOT NULL, links TEXT NOT NULL);
     -- For each note, the name keys its links are looked up by, once each, with those links (JSON
     -- flat pairs, as in Note). Links are resolved when a page asks, as in VaultIndex: this finds
-    -- the links that may point at a file. (No index by note: a note's rows are found from its links.)
-    CREATE TABLE link_names(name TEXT NOT NULL, note INTEGER NOT NULL, links TEXT NOT NULL,
-      PRIMARY KEY(name, note)) WITHOUT ROWID;
+    -- the links that may point at a file. Keyed by note, so a scan appends rows in order; only the
+    -- small index by name takes inserts all over.
+    CREATE TABLE link_names(note INTEGER NOT NULL, name TEXT NOT NULL, links TEXT NOT NULL,
+      PRIMARY KEY(note, name)) WITHOUT ROWID;
+    CREATE INDEX link_names_name ON link_names(name);
     -- Lookup keys per note: 0 alias, 1 tag (with its parent tags), 2 the matcher's keys.
     CREATE TABLE note_keys(kind INTEGER NOT NULL, key TEXT NOT NULL, note INTEGER NOT NULL,
       PRIMARY KEY(kind, key, note)) WITHOUT ROWID;

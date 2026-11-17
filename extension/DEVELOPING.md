@@ -53,6 +53,13 @@ Roam Depot tab.
   their own; a moved folder's notes keep their parse under the new path. Only an `errored` record, or an
   `unknown` one without a path (events lost somewhere in the vault), walks the whole vault again.
 - Daily notes use the format in `.obsidian/daily-notes.json`, falling back to `YYYY-MM-DD`.
+- Similar names (`src/core/fuzzy.ts`, `src/core/fuzzy-index.ts`): a fuzzy match must start every word with the
+  same letter, so notes sit in buckets keyed by the first letters of their words, sorted. A page title judges
+  only its own bucket, plus the bucket a swap of a word's first two letters gives. Only paths are kept; keys
+  are made again from names when a page asks (about 1.6 MB and 0.1 to 2 ms a page at 20,000 notes). The
+  scoring, its guards and the highlighted letters (`diffMarks`) are in `fuzzy.ts`. To measure quality,
+  latency and memory: `npm pack wordlist-english && tar xzf wordlist-english-*.tgz` once, then
+  `WORDS=path/to/package node --expose-gc test/fuzzy-bench.mjs [notes]`.
 - The scan skips dot-folders, paths matched by the vault's `.gitignore` files (git's rules, through the
   `ignore` package, nearest file decides) and Obsidian's Excluded files (`userIgnoreFilters` in
   `.obsidian/app.json`: a plain entry is a path prefix, `/.../` a regular expression tested against file

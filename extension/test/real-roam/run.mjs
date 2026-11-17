@@ -219,7 +219,7 @@ const clickLeaf = (text, scope = '.bp3-dialog') => evalIn(([text, scope]) => {
 }, [text, scope]);
 async function openSettings() {
   if (await evalIn(() => !!document.querySelector('.bp3-dialog .rm-settings, .bp3-dialog'))) return;
-  const more = page.locator('.rm-topbar .bp3-icon-more, .rm-topbar [icon="more"]').first();
+  const more = page.locator('.rm-topbar .bp3-icon-more').first();
   if (await more.count()) await more.click(); else await page.mouse.click(1088, 22);
   await waitFor('the More menu', () => evalIn(() => !!document.querySelector('.bp3-menu-item')), 5000);
   await evalIn(() => [...document.querySelectorAll('.bp3-menu-item')].find((e) => /^Settings/.test(e.innerText.trim()))?.click());
@@ -231,17 +231,18 @@ async function openVaultsTab() {
   await waitFor('the "Vaults (dev)" settings tab', () => clickLeaf('Vaults (dev)'), 20000);
   await waitFor('the vault list', () => evalIn(() => !!document.querySelector('.rv-settings')), 10000);
 }
-/** Clicks the icon `name` in the row whose label is `label`, or falls back to the given point. */
-async function clickRowIcon(label, name, fallback) {
-  const hit = await evalIn(([label, name]) => {
-    const lab = [...document.querySelectorAll('.bp3-dialog *')].find((e) => e.children.length === 0 && e.textContent.trim() === label);
-    for (let row = lab; row && !row.classList?.contains('bp3-dialog'); row = row.parentElement) {
-      const icon = row.querySelector(`.bp3-icon-${name}, [icon="${name}"]`);
-      if (icon) { (icon.closest('button, a, .bp3-button') ?? icon).click(); return true; }
-    }
-    return false;
-  }, [label, name]);
-  if (!hit) { log(`no ${name} icon found next to "${label}", clicking ${fallback}`); await page.mouse.click(...fallback); }
+/** Clicks the icon button `name` (cog, link, ...) in the Roam Depot section header that reads `label`. */
+async function clickHeaderIcon(label, name) {
+  const btn = page.locator('.bp3-dialog .rm-extensions-installed__header', { hasText: label }).locator(`button.bp3-icon-${name}`).first();
+  await btn.waitFor({ timeout: 10000 });
+  // the header moves for a moment while Roam Depot lays out, so wait until it stays put
+  let last = null;
+  for (let i = 0; i < 20; i++) {
+    const box = await btn.boundingBox();
+    if (box && last && box.x === last.x && box.y === last.y) break;
+    last = box; await sleep(150);
+  }
+  await btn.click();
 }
 async function loadDevExtension() {
   await openSettings();
@@ -249,11 +250,11 @@ async function loadDevExtension() {
   await waitFor('Roam Depot in Settings', () => clickLeaf('Roam Depot'), 10000);
   await waitFor('the Roam Depot settings', () => evalIn(() => /Installed Extensions/.test(document.querySelector('.bp3-dialog')?.innerText ?? '')), 15000);
   if (!(await evalIn(() => /Developer Extensions/.test(document.querySelector('.bp3-dialog')?.innerText ?? '')))) {
-    await clickRowIcon('Installed Extensions', 'cog', [1095, 363]);
+    await clickHeaderIcon('Installed Extensions', 'cog');
     await waitFor('"Enable developer mode"', () => clickLeaf('Enable developer mode', '.bp3-popover'), 5000);
     await waitFor('the Developer Extensions row', () => evalIn(() => /Developer Extensions/.test(document.querySelector('.bp3-dialog')?.innerText ?? '')), 5000);
   }
-  await clickRowIcon('Developer Extensions', 'link', [1095, 517]);
+  await clickHeaderIcon('Developer Extensions', 'link');
   const input = page.locator('input[placeholder^="Something like"]');
   await input.waitFor({ timeout: 5000 });
   await input.fill(EXT_URL);

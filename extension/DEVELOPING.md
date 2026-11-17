@@ -3,6 +3,10 @@
 The user-facing guide is [README.md](README.md). Roam Depot shows that file inside Roam, so keep
 developer notes here.
 
+Roam renders the README like GitHub does: `<details>`/`<summary>` collapsibles work, Markdown inside
+`<div align="center">` is kept, and a bare `https://github.com/user-attachments/assets/...` line shows
+as a video. Images must use absolute URLs pinned to a commit.
+
 ## Build and test
 
 ```bash

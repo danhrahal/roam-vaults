@@ -1,6 +1,12 @@
+<div align="center">
+
 # Vaults
 
 See notes from your Obsidian-style vaults in your Roam graph.
+
+![External Vault References on a Roam page, listing notes from two vaults](https://raw.githubusercontent.com/sweenzor/roam-vaults/064219d198df126441412a0f77693b171ff139c8/docs/images/one-section.png)
+
+</div>
 
 Vaults adds an **External Vault References** section to every Roam page. It sits below Linked and
 Unlinked References and looks like them. It lists the notes in your Obsidian-style vaults, meaning local
@@ -9,9 +15,8 @@ folders of Markdown notes, that are about the page you're on or link to it.
 It only reads your vault. Nothing from the vault is written to your Roam graph, and nothing is sent over the
 network.
 
-![External Vault References on a Roam page, listing notes from two vaults](https://raw.githubusercontent.com/sweenzor/roam-vaults/064219d198df126441412a0f77693b171ff139c8/docs/images/one-section.png)
-
-## What's an Obsidian-style vault?
+<details>
+<summary><b>What's an Obsidian-style vault?</b></summary>
 
 A vault is just a folder of Markdown (`.md`) files on your computer, with subfolders, that link to each
 other. [Obsidian](https://obsidian.md) made the idea popular. See
@@ -25,6 +30,8 @@ is an open format from Google Cloud for knowledge kept as plain Markdown files w
 ([spec](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)). OKF uses standard
 Markdown links, including bundle-absolute ones like `[Customers](/tables/customers.md)`, and Vaults follows
 those as well as `[[wikilinks]]`.
+
+</details>
 
 ## What it shows
 
@@ -54,7 +61,7 @@ second.
 
 ## Requirements
 
-- **Roam desktop app** (tested on macOS). Roam in Chrome or Edge should also work, but the browser asks you to
+- **Roam desktop app** (tested on macOS and Linux). Roam in Chrome or Edge should also work, but the browser asks you to
   allow folder access again on each visit unless you choose "Allow on every visit". Other browsers and
   Roam's mobile apps can't read local folders (see [Mobile](#mobile)).
 - A folder of Markdown (`.md`) files, such as an Obsidian vault or an OKF bundle. Obsidian vaults work
@@ -70,13 +77,9 @@ Matching notes then show up below Linked References, as **"External Vault Refere
 section appears only on pages that have matching vault notes. Other pages look exactly as before. The first
 scan of a large vault takes a few seconds. After that, only changed files are read again.
 
-### Choosing the right folder
-
-Choose the vault folder itself, such as `Documents/My Vault`. Don't choose `Documents`, `Desktop`,
-`Downloads` or your home folder. macOS protects those folders, and Roam can't open them. If that happens,
-the extension tells you, and you need to quit and reopen Roam before you try again.
-
-You can't type a folder path. Roam can only read a folder you pick in the system's folder dialog.
+Choose the vault folder itself, such as `Documents/My Vault`, not a folder above it like `Documents` or
+your home folder. You can't type a folder path: Roam can only read a folder you pick in the system's
+folder dialog.
 
 ### Managing vaults
 
@@ -88,12 +91,48 @@ Everything is in **Settings → Roam Depot → Vaults**:
   The page itself never shows indexing or permission notices.
 - **Remove** forgets that vault on this computer and deletes its cache. Your files aren't touched.
 - **Reconnect** appears when Roam needs your permission again to read a vault.
-- "Last scan didn't finish" means Roam crashed while reading that vault, for example because it ran
-  out of memory on a very large folder. So that Roam stays usable, the vault isn't read again until you
-  click the **Rescan** in its row. If it keeps happening, remove it or choose a smaller folder.
+- **"Last scan didn't finish"** means Roam crashed while reading that vault. It isn't read again until
+  you click **Rescan** in its row (see [Troubleshooting](#troubleshooting)).
 - **Rescan** reads every vault again, except one whose last scan didn't finish. Only changed files are parsed.
 
 Vaults adds no commands to the command palette.
+
+## Troubleshooting
+
+<details>
+<summary><b>Roam can't open the folder I picked</b></summary>
+
+macOS protects `Documents`, `Desktop`, `Downloads` and your home folder, and Roam can't open them
+directly. Choose the vault folder inside them instead, such as `Documents/My Vault`. If Roam already
+refused a folder, quit and reopen Roam before you try again.
+
+</details>
+
+<details>
+<summary><b>A vault says "Needs permission again"</b></summary>
+
+Roam needs you to allow access to that folder again. Click **Reconnect** in its row and allow access. In Chrome or Edge, choose "Allow on every
+visit" so the browser doesn't ask each time.
+
+</details>
+
+<details>
+<summary><b>A vault says "Last scan didn't finish"</b></summary>
+
+Roam crashed while reading that vault, for example because it ran out of memory on a very large folder.
+So that Roam stays usable, the vault isn't read again on start until you click the **Rescan** in its
+row. If it keeps happening, remove the vault or choose a smaller folder.
+
+</details>
+
+<details>
+<summary><b>A note I expect isn't listed</b></summary>
+
+Check that it matches one of the rules in [What it shows](#what-it-shows): same name, an alias, the
+same folder path, the same daily-note date, a `[[link]]` or a `#tag`. Similar titles aren't matched
+yet. Only `.md` files are read. If you just changed the note and it doesn't show yet, click **Rescan**.
+
+</details>
 
 ## Privacy
 
@@ -112,12 +151,17 @@ Vaults adds no commands to the command palette.
 Roam's mobile apps can't read folders on your phone, so External Vault References doesn't show on mobile in
 this version.
 
+<details>
+<summary><b>A possible mobile snapshot, and its privacy tradeoff</b></summary>
+
 A later version may add an opt-in **mobile snapshot**. Your desktop would upload a copy of the vault index
 into your graph's file storage, and your phone would read that copy. It will be off unless you turn it on.
 Before you turn it on, know this: Roam's file links aren't private. **Anyone who has the snapshot's link can
 download it without signing in to Roam.** The link is hard to guess, but it's stored in your graph, so anyone
 who can read your graph can find it, and you can't revoke a copy someone has already downloaded. Don't use the
 snapshot for a vault you wouldn't want shared that way.
+
+</details>
 
 ## Limits in this version
 

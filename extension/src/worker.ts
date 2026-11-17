@@ -4,6 +4,7 @@ import { VaultEngine, inFolder, type VaultFS, type FileMeta, type Cache } from '
 import { readNotes, writeNotes } from './cache-db.ts';
 import { intern } from './core/parser.ts';
 import { NONE } from './core/vault-index.ts';
+import { VaultIgnore, GITIGNORE } from './core/ignore.ts';
 import type { Note } from './core/types.ts';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -19,6 +20,8 @@ let dirs = new Map<string, FileSystemDirectoryHandle>();
 // Paths are kept in NFC. The few files whose name on disk is written differently (decomposed
 // accents, common in folders that came from a Mac) are looked up by that name.
 let diskNames = new Map<string, string>();
+// What the vault's .gitignore files and Obsidian's Excluded files leave out, as of the last scan.
+let rules = new VaultIgnore();
 let live = false;      // is the file watcher running?
 let notLiveWhy = '';
 
@@ -70,12 +73,20 @@ const handleFS: VaultFS = {
     const found = new Map<string, FileSystemDirectoryHandle>();
     const names = new Map<string, string>();
     const pending: Promise<void>[] = [];
+    // A whole scan reads the rules afresh; one folder adds its own .gitignore files to those in use.
+    const skip = folder ? rules : new VaultIgnore();
+    if (!folder) skip.setObsidianFilters((await obsidianConfig('app.json'))?.userIgnoreFilters);
     async function walk(dir: FileSystemDirectoryHandle, prefix: string) {
+      // A folder's .gitignore applies to everything in it, so read it before the folder's entries.
+      const gi = await textOf(dir, GITIGNORE);
+      if (gi !== null) skip.addGitignore(prefix, gi);
       for await (const [name, h] of (dir as any).entries() as AsyncIterable<[string, FileSystemHandle]>) {
         madeHandles(1);
         if (name.startsWith('.')) continue; // .obsidian, .trash, .git
         const rel = (prefix ? `${prefix}/${name}` : name).normalize('NFC');
         if (name !== name.normalize('NFC')) names.set(rel, name);
+        // Left out folders are not walked at all, so they cost nothing.
+        if (skip.ignores(rel, h.kind === 'directory')) continue;
         if (h.kind === 'directory') { found.set(rel, h as FileSystemDirectoryHandle); await walk(h as FileSystemDirectoryHandle, rel); }
         else if (!/\.md$/i.test(name)) out.push({ path: rel, size: 0, mtime: 0 }); // only notes need a size and time
         else {
@@ -90,7 +101,7 @@ const handleFS: VaultFS = {
     if (!folder) {
       await walk(root!, '');
       await Promise.all(pending);
-      dirs = found; diskNames = names;
+      dirs = found; diskNames = names; rules = skip;
       return out;
     }
     // One folder. Handles kept for it and the folders inside may be for what was there before it
@@ -98,6 +109,7 @@ const handleFS: VaultFS = {
     const inside = (p: string) => p === folder || p.startsWith(folder + '/');
     for (const p of [...dirs.keys()]) if (inside(p)) dirs.delete(p);
     for (const p of [...diskNames.keys()]) if (p.startsWith(folder + '/')) diskNames.delete(p);
+    rules.forgetGitignores(folder);
     await walk(await getDir(folder), folder);
     await Promise.all(pending);
     for (const [p, h] of found) dirs.set(p, h);
@@ -145,14 +157,22 @@ function saveCacheSoon(from: VaultEngine) {
 }
 
 // ---------- vault settings ----------
+/** The text of a file in a folder, or null if there is none. */
+async function textOf(dir: FileSystemDirectoryHandle, name: string): Promise<string | null> {
+  try { madeHandles(2); return await (await (await dir.getFileHandle(name)).getFile()).text(); }
+  catch { return null; }
+}
+/** One of Obsidian's settings files in .obsidian, parsed, or null. */
+async function obsidianConfig(name: string): Promise<any> {
+  try { return JSON.parse((await textOf(await root!.getDirectoryHandle('.obsidian'), name)) ?? 'null'); }
+  catch { return null; }
+}
+/** Settings files whose change can change what is indexed or how: a scan reads them again. */
+const SETTINGS = new Set(['.obsidian/app.json', '.obsidian/daily-notes.json']);
 async function dailyFormats(): Promise<string[]> {
   const fmts = ['YYYY-MM-DD'];
-  try {
-    const cfg = await root!.getDirectoryHandle('.obsidian');
-    const f = await (await cfg.getFileHandle('daily-notes.json')).getFile();
-    const j = JSON.parse(await f.text());
-    if (typeof j.format === 'string' && j.format.trim()) fmts.unshift(j.format.trim());
-  } catch { /* no daily-notes config: Obsidian's default format */ }
+  const f = (await obsidianConfig('daily-notes.json'))?.format;
+  if (typeof f === 'string' && f.trim()) fmts.unshift(f.trim()); // else Obsidian's default format
   return [...new Set(fmts)];
 }
 
@@ -165,6 +185,7 @@ let rewatch = false;   // the watcher reported "errored": it has stopped and mus
 let building = 0;      // scans in progress
 let refreshing = false;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
+/** In a dot-folder, or a dot-file: never indexed. */
 const hidden = (path: string) => path.split('/').some((s) => s.startsWith('.'));
 function onRecords(records: any[]) {
   for (const r of records) {
@@ -175,17 +196,23 @@ function onRecords(records: any[]) {
     if (r.type === 'errored') rewatch = true;
     // Events were lost somewhere in the vault, or the watcher stopped: walk the whole vault.
     if (r.type === 'errored' || (r.type === 'unknown' && !path)) { needRescan = true; continue; }
-    let from = r.type === 'moved' && r.relativePathMovedFrom ? r.relativePathMovedFrom.join('/').normalize('NFC') : undefined;
-    if (from !== undefined && (!from || hidden(from))) from = undefined;
+    if (!path) continue;
     // A folder appeared, went away or moved, or events inside it were lost: walk just that folder.
     // A folder that appears may bring notes that get no events of their own.
-    const folder = r.type === 'unknown' || r.changedHandle?.kind === 'directory' || !/\.[^/]+$/.test(path);
-    if (!path || hidden(path)) {
-      // Moved into a hidden folder such as .trash: it is gone from the vault.
-      if (from !== undefined) { if (folder) pendingFolders.set(from, pendingFolders.get(from)); else pendingPaths.add(from); }
+    const isDir = r.type === 'unknown' || r.changedHandle?.kind === 'directory' || !/\.[^/]+$/.test(path);
+    // An ignore file or a settings file changed: which files are in the index, or how they are read, may have too.
+    const dir = path.slice(0, Math.max(0, path.lastIndexOf('/')));
+    if (SETTINGS.has(path) || (name === GITIGNORE && !isDir && !hidden(dir) && !(dir && rules.ignoresAnywhere(dir, true)))) {
+      needRescan = true; continue;
+    }
+    let from = r.type === 'moved' && r.relativePathMovedFrom ? r.relativePathMovedFrom.join('/').normalize('NFC') : undefined;
+    if (from !== undefined && (!from || hidden(from) || rules.ignoresAnywhere(from, isDir))) from = undefined;
+    if (hidden(path) || rules.ignoresAnywhere(path, isDir)) {
+      // Moved out of the index's reach, such as into .trash: it is gone from the vault.
+      if (from !== undefined) { if (isDir) pendingFolders.set(from, pendingFolders.get(from)); else pendingPaths.add(from); }
       continue;
     }
-    if (folder) { pendingFolders.set(path, from ?? pendingFolders.get(path)); continue; }
+    if (isDir) { pendingFolders.set(path, from ?? pendingFolders.get(path)); continue; }
     if (from !== undefined) pendingPaths.add(from);
     pendingPaths.add(path);
   }
@@ -202,10 +229,15 @@ async function flush() {
     await scan().catch(() => {}); // build() has already reported the failure
     return;
   }
-  const folders = [...pendingFolders].map(([path, from]) => ({ path, from }));
+  // Checked again here: changes seen while the first scan ran came in before its rules were read.
+  const folders: { path: string; from?: string }[] = [];
+  for (const [path, from] of pendingFolders) {
+    if (!rules.ignoresAnywhere(path, true)) folders.push({ path, from });
+    else if (from !== undefined) folders.push({ path: from }); // moved somewhere ignored: gone
+  }
   // A note in a folder being walked is checked by the walk.
   const walked = new Set(folders.map((f) => f.path));
-  const paths = [...pendingPaths].filter((p) => !inFolder(p, walked));
+  const paths = [...pendingPaths].filter((p) => !inFolder(p, walked) && !rules.ignoresAnywhere(p, false));
   pendingPaths = new Set(); pendingFolders = new Map();
   const e = engine;
   refreshing = true;
@@ -269,7 +301,7 @@ function scan(): Scan {
 const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
   async open({ handle, key }) {
     if (key !== vaultKey) { engine = null; unsaved = new Map(); }
-    root = handle; vaultKey = key; dirs = new Map(); diskNames = new Map();
+    root = handle; vaultKey = key; dirs = new Map(); diskNames = new Map(); rules = new VaultIgnore();
     await watch(); // before the scan, so a file edited while it runs is not missed
     return scan();
   },

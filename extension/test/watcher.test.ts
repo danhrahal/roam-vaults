@@ -76,6 +76,7 @@ const record = (type: string, path: string, kind: 'file' | 'directory', from?: s
 /** The notes linking to a page, by path. */
 const linking = async (title: string) => (await call('query', { title })).result.backlinks.map((b: any) => b.path).sort();
 
+write('.gitignore', 'Build/\n');
 write('Hub.md', 'hub');
 write('Notes/One.md', '[[Hub]] one');
 await call('open', { handle: dirHandle(''), key: 'watched' });
@@ -139,4 +140,21 @@ test('lost events in one folder walk that folder; lost events anywhere walk the 
   report([{ type: 'errored', relativePathComponents: [] }]);
   await settled();
   assert.equal(rootWalks, 3);
+});
+
+test('a new folder that is ignored costs nothing; a new folder\'s own .gitignore is followed', async () => {
+  const before = reads;
+  write('Build/out/Gen.md', '[[Hub]] generated');
+  report([record('appeared', 'Build/out', 'directory'), record('appeared', 'Build/out/Gen.md', 'file')]);
+  await settled();
+  assert.equal(reads, before, 'nothing in an ignored folder is read');
+  assert.ok(!(await linking('Hub')).includes('Build/out/Gen.md'));
+  write('Tool/.gitignore', 'cache/\n');
+  write('Tool/Readme.md', '[[Hub]] tool');
+  write('Tool/cache/Tmp.md', '[[Hub]] cached');
+  report([record('appeared', 'Tool', 'directory')]);
+  await settled();
+  const hub = await linking('Hub');
+  assert.ok(hub.includes('Tool/Readme.md') && !hub.includes('Tool/cache/Tmp.md'));
+  assert.equal(rootWalks, 3, 'still no walk of the whole vault');
 });

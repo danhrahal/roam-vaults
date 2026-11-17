@@ -124,6 +124,8 @@ snapshot for a vault you wouldn't want shared that way.
 - Matching uses the exact rules above. Fuzzy or "similar title" matches aren't shown yet.
 - Notes are shown as read-only previews. Edit them in Obsidian or your usual editor.
 - Only `.md` files are read. Canvas files, PDFs and attachments are skipped.
+- Files and folders your vault's `.gitignore` files ignore, or that Obsidian's **Excluded files** setting
+  lists, are skipped. So are folders whose name starts with a dot, such as `.obsidian` and `.trash`.
 
 ## Feedback and source
 

@@ -33,6 +33,11 @@ export class VaultIgnore {
     this.git.set(dir, ig.add(rules));
   }
 
+  /** Drop the .gitignore rules found in a folder and the folders inside, before it is walked again. */
+  forgetGitignores(folder: string) {
+    for (const dir of [...this.git.keys()]) if (dir === folder || dir.startsWith(folder + '/')) this.git.delete(dir);
+  }
+
   get empty() { return !this.git.size && !this.filters.length; }
 
   /**

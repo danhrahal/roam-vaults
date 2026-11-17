@@ -45,6 +45,10 @@ Roam Depot tab.
   its cache.
 - Folder handles are kept in this device's IndexedDB, never in Roam settings, which sync through the graph.
 - `FileSystemObserver` watches the folder, so edits made in Obsidian or any editor show up within a second.
+  A file event re-checks that file. A folder that appears, goes away or moves is walked on its own
+  (`VaultEngine.refreshFolders`), since a folder moved into the vault brings notes that get no events of
+  their own; a moved folder's notes keep their parse under the new path. Only an `errored` record, or an
+  `unknown` one without a path (events lost somewhere in the vault), walks the whole vault again.
 - Daily notes use the format in `.obsidian/daily-notes.json`, falling back to `YYYY-MM-DD`.
 - The scan skips dot-folders, paths matched by the vault's `.gitignore` files (git's rules, through the
   `ignore` package, nearest file decides) and Obsidian's Excluded files (`userIgnoreFilters` in
@@ -93,8 +97,9 @@ browsing, some edits and a rescan. Pass a second argument to measure another bui
 
 Without `DISK=1` the vault lives in the browser's private file system. With it, the vault is written to a
 temporary folder and handed to the page the way a dropped folder is, so the handles, the reads and the file
-watcher are the ones a picked folder gets. That run also checks a note whose name is not NFC on disk and a
-folder renamed while the vault is open. Neither is Roam's desktop app, so compare runs of two builds rather
+watcher are the ones a picked folder gets. That run also checks a note whose name is not NFC on disk, and
+folders created, moved in, renamed, deleted and moved to `.trash` while the vault is open, without a
+walk of the whole vault. Neither is Roam's desktop app, so compare runs of two builds rather
 than reading the numbers as what a vault costs there.
 
 Things that made 0.1.0 heavy, to keep out:

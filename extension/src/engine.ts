@@ -8,8 +8,10 @@ import type { Note } from './core/types.ts';
 
 export interface FileMeta { path: string; size: number; mtime: number }
 export interface VaultFS {
-  /** Every file in the vault, '/'-separated paths relative to the root, dot-folders and ignored paths skipped. */
-  list(): Promise<FileMeta[]>;
+  /** Every file in the vault, or in one folder of it and the folders inside: '/'-separated paths
+   *  relative to the vault, dot-folders and ignored paths skipped. Rejects with a NotFoundError if
+   *  the folder is gone. */
+  list(folder?: string): Promise<FileMeta[]>;
   readText(path: string): Promise<string>;
   /** Metadata for one path, or null if it no longer exists. */
   stat(path: string): Promise<FileMeta | null>;
@@ -126,6 +128,76 @@ export class VaultEngine {
     return changed;
   }
 
+  /**
+   * Re-check whole folders after a watcher event, walking only them: a folder appeared (its notes
+   * may come without events of their own), went away, or moved, or the watcher lost track of what
+   * happened inside it. `from` is where a moved folder was: its notes keep their parse under the
+   * new path instead of being read again. Returns true if anything changed.
+   */
+  async refreshFolders(folders: { path: string; from?: string }[], concurrency = 16): Promise<boolean> {
+    let changed = false;
+    const walk = outermost(folders.map((f) => f.path));
+    const clear = new Set<string>();
+    const recheck: string[] = [];
+    // Notes of a moved folder, by their new path.
+    const reuse = new Map<string, Note>();
+    for (const { path, from } of folders) {
+      if (from === undefined || from === path) continue;
+      clear.add(from);
+      for (const [p, n] of this.idx.notes) if (p.startsWith(from + '/')) reuse.set(path + p.slice(from.length), n);
+    }
+    const seen = new Map<string, FileMeta>();
+    for (const dir of walk) {
+      recheck.push(dir); // a file can have the name the event gave
+      try {
+        for (const f of await this.fs.list(dir)) seen.set(f.path, f);
+        clear.add(dir);
+      } catch (e) {
+        if ((e as Error)?.name === 'NotFoundError') clear.add(dir);
+        else for (const p of this.idx.files.keys()) if (p.startsWith(dir + '/')) recheck.push(p);
+      }
+    }
+    // What the index has in those folders and is no longer there.
+    for (const p of [...this.idx.files.keys()]) {
+      if (seen.has(p) || !inFolder(p, clear)) continue;
+      this.forget(p);
+      this.idx.removeFile(p);
+      if (MD.test(p)) this.unsaved.set(p, null);
+      changed = true;
+    }
+    const toRead: FileMeta[] = [];
+    for (const f of seen.values()) {
+      if (!MD.test(f.path)) {
+        if (!this.idx.files.has(f.path)) { this.idx.addAttachment(f.path); changed = true; }
+        continue;
+      }
+      const c = this.idx.notes.get(f.path) ?? reuse.get(f.path);
+      if (!c || c.size !== f.size || c.mtime !== f.mtime) { toRead.push(f); continue; }
+      if (c.path === f.path) continue;
+      const note = { ...c, path: f.path };
+      this.idx.upsertNote(note);
+      this.unsaved.set(f.path, note);
+      changed = true;
+    }
+    let i = 0;
+    const work = async () => {
+      while (i < toRead.length) {
+        const f = toRead[i++];
+        this.forget(f.path);
+        try {
+          const note = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime);
+          this.idx.upsertNote(note);
+          this.unsaved.set(f.path, note);
+          changed = true;
+        } catch { /* half-written or placeholder file: the next event will retry */ }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, toRead.length) }, work));
+    if (await this.refresh(recheck)) changed = true;
+    clearInterned();
+    return changed;
+  }
+
   /** Everything the vault knows about one Roam page title. */
   async query(title: string): Promise<PageResult> {
     const a = this.matcher.associations(title);
@@ -185,6 +257,17 @@ export class VaultEngine {
     const t = this.texts.get(path);
     if (t !== undefined) { this.texts.delete(path); this.textChars -= t.length; }
   }
+}
+
+/** The folders given, without those inside another one of them. */
+export function outermost(folders: string[]): string[] {
+  const all = new Set(folders);
+  return [...all].filter((f) => !inFolder(f, all));
+}
+/** Is a path inside one of these folders, at any depth? */
+export function inFolder(path: string, folders: Set<string>): boolean {
+  for (let i = path.indexOf('/'); i > 0; i = path.indexOf('/', i + 1)) if (folders.has(path.slice(0, i))) return true;
+  return false;
 }
 
 /** One line of a text, without its line break. */

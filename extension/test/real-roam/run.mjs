@@ -258,7 +258,8 @@ async function loadDevExtension() {
   const input = page.locator('input[placeholder^="Something like"]');
   await input.waitFor({ timeout: 5000 });
   await input.fill(EXT_URL);
-  await evalIn(() => [...[...document.querySelectorAll('.bp3-dialog')].pop().querySelectorAll('button')].find((b) => b.innerText.trim() === 'Load remote extension').click());
+  await sleep(500); // an instant click after typing loads nothing: Roam's input state lags a moment
+  await page.locator('.bp3-dialog button', { hasText: 'Load remote extension' }).click();
   await waitFor('"Vaults (dev)" in Settings', () => evalIn(() =>
     [...document.querySelectorAll('.bp3-dialog *')].some((e) => e.children.length === 0 && e.textContent.trim() === 'Vaults (dev)')), 30000);
   await dismissDialogs();

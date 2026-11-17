@@ -3,6 +3,10 @@
 The user-facing guide is [README.md](README.md). Roam Depot shows that file inside Roam, so keep
 developer notes here.
 
+Roam renders the README like GitHub does: `<details>`/`<summary>` collapsibles work, Markdown inside
+`<div align="center">` is kept, and a bare `https://github.com/user-attachments/assets/...` line shows
+as a video. Images must use absolute URLs pinned to a commit.
+
 ## Build and test
 
 ```bash
@@ -12,6 +16,9 @@ npm run typecheck
 npm run build        # writes dist/extension.js and copies README.md and CHANGELOG.md into dist/
 npm run test:browser # builds, then runs a headless browser smoke test
 ```
+
+The Tests workflow (`.github/workflows/tests.yml`) runs the type check, unit tests and smoke test on
+GitHub Actions for every pull request and push to main, and fails if `dist/` is out of date.
 
 `./build.sh` is what Roam Depot runs (see [docs/DEPOT-SUBMISSION.md](../docs/DEPOT-SUBMISSION.md)). It
 does a clean `npm ci`, builds, and copies `dist/extension.js` to `extension.js` in this folder, where the
@@ -41,11 +48,39 @@ Roam Depot tab.
   its cache.
 - Folder handles are kept in this device's IndexedDB, never in Roam settings, which sync through the graph.
 - `FileSystemObserver` watches the folder, so edits made in Obsidian or any editor show up within a second.
+  A file event re-checks that file. A folder that appears, goes away or moves is walked on its own
+  (`VaultEngine.refreshFolders`), since a folder moved into the vault brings notes that get no events of
+  their own; a moved folder's notes keep their parse under the new path. Only an `errored` record, or an
+  `unknown` one without a path (events lost somewhere in the vault), walks the whole vault again.
 - Daily notes use the format in `.obsidian/daily-notes.json`, falling back to `YYYY-MM-DD`.
+- The scan skips dot-folders, paths matched by the vault's `.gitignore` files (git's rules, through the
+  `ignore` package, nearest file decides) and Obsidian's Excluded files (`userIgnoreFilters` in
+  `.obsidian/app.json`: a plain entry is a path prefix, `/.../` a regular expression tested against file
+  paths). Ignored folders are never opened. The watcher drops events under them, and a change to a
+  `.gitignore`, `app.json` or `daily-notes.json` rescans. See `src/core/ignore.ts`.
 - CSS classes are prefixed `rv-`, and every DOM node the extension adds carries a data attribute, so
   `onunload` can remove all of them.
 
 The design and measurements are in [docs/FEASIBILITY.md](../docs/FEASIBILITY.md).
+
+## Real Roam run (GitHub Actions)
+
+`.github/workflows/real-roam.yml` runs `test/real-roam/run.mjs` on pull requests that touch `extension/`
+and on demand (Actions > Real Roam > Run workflow). It installs Roam's Linux desktop app, starts it under
+Xvfb, signs in to the hosted test graph, loads `dist/` through Roam Depot's developer mode (from a local
+URL), and drives it over the DevTools protocol with Playwright. It checks the settings tab, a small vault
+on a real page (including a live edit), memory through a 20,000-note vault's first scan and Rescans, and
+that a scan which crashed Roam waits for Rescan. RESULTS.md and PNG screenshots are uploaded as the run's
+artifact; the memory limits are at the top of `run.mjs`.
+
+It needs the repository secrets `ROAM_EMAIL` and `ROAM_PASSWORD` (a Roam account that can open the test
+graph) and is skipped without them, including on pull requests from forks. The repository variable
+`ROAM_GRAPH` picks another graph. The script never logs, saves or photographs the credentials: no
+screenshot is taken until the graph is open, and Roam's own log and console stay out of the output.
+
+To run it by hand: install the Roam `.deb` and Xvfb, start `Xvfb :99`, then
+`DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… node test/real-roam/run.mjs` (`NOTES=2000` for a quicker run).
+A Roam profile that is already signed in skips the sign-in.
 
 ## Memory
 
@@ -65,8 +100,9 @@ browsing, some edits and a rescan. Pass a second argument to measure another bui
 
 Without `DISK=1` the vault lives in the browser's private file system. With it, the vault is written to a
 temporary folder and handed to the page the way a dropped folder is, so the handles, the reads and the file
-watcher are the ones a picked folder gets. That run also checks a note whose name is not NFC on disk and a
-folder renamed while the vault is open. Neither is Roam's desktop app, so compare runs of two builds rather
+watcher are the ones a picked folder gets. That run also checks a note whose name is not NFC on disk, and
+folders created, moved in, renamed, deleted and moved to `.trash` while the vault is open, without a
+walk of the whole vault. Neither is Roam's desktop app, so compare runs of two builds rather
 than reading the numbers as what a vault costs there.
 
 Things that made 0.1.0 heavy, to keep out:

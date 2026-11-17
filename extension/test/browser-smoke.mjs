@@ -69,7 +69,11 @@ await p.evaluate(async () => {
   // Minimal stand-in for the React that Roam provides, enough to mount the settings component.
   window.__effects = [];
   window.React = { createElement: (t, props) => ({ t, props }), useRef: () => (window.__settingsRef = { current: null }), useEffect: (fn) => window.__effects.push(fn) };
-  const settings = { panel: { create: (cfg) => { window.__settings = cfg; } } };
+  const settings = { panel: { create: (cfg) => { window.__settings = cfg; } }, get: (id) => (id === 'open-with' ? window.__openWith : undefined) };
+  // record where the viewer's open button sends a note instead of leaving the page
+  window.__opened = [];
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { if (/^(obsidian|vscode):/.test(this.href)) window.__opened.push(this.href); else click.call(this); };
   const ext = (await import('/extension.js')).default;
   console.log('imported');
   window.__ext = ext;
@@ -129,10 +133,30 @@ const live = await p.waitForFunction(() => document.querySelector('.rv-panel')?.
 ok('live update via FileSystemObserver', live);
 ok('unfolded note stays open after live update', await p.locator('.rv-preview').evaluate((e) => !e.hidden && e.textContent.includes('Kickoff with')));
 
-// viewer opens at the linked line
+// viewer opens at the top of the note, with the linked line highlighted
+// (the viewer is squeezed so the note scrolls and the highlighted line starts out of view; Roam's
+// own styles let the title and path rows shrink, which min-height:0 stands in for here)
+await p.addStyleTag({ content: '.rv-viewer{max-height:130px}.rv-viewer>*{min-height:0}' });
 await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
 await p.waitForSelector('.rv-viewer .rv-hl');
 ok('viewer highlights line', (await p.locator('.rv-viewer .rv-hl').textContent()).includes('see'));
+ok('viewer opens at the top of the note', await p.locator('.rv-viewer > .rv-viewer-body').evaluate((e) => e.scrollHeight > e.clientHeight && e.scrollTop === 0));
+ok('viewer keeps the title and path clear of the scrolling note', await p.locator('.rv-viewer').evaluate((v) => [...v.children].slice(0, 2).every((e) => e.scrollHeight <= e.clientHeight + 1)));
+await p.evaluate(() => document.querySelector('style:last-of-type')?.remove());
+// the open button: Obsidian by default, the "Open notes with" link when it's set
+ok('settings has an "Open notes with" text field', await p.evaluate(() => window.__settings.settings.some((x) => x.id === 'open-with' && x.name === 'Open notes with' && x.action.type === 'input')));
+const openBtn = () => p.locator('.rv-viewer-head button').first();
+ok('viewer button reads Open in Obsidian by default', (await openBtn().textContent()) === 'Open in Obsidian');
+await openBtn().click();
+ok('Open in Obsidian opens an obsidian:// link', (await p.evaluate(() => window.__opened.pop())) === 'obsidian://open?vault=My%20Vault&file=Zettel%2FHiring%20neural');
+await p.keyboard.press('Escape');
+await p.evaluate(() => { window.__openWith = 'vscode://file/Users/me/Notes/{vault}/{file}'; });
+await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
+await p.waitForSelector('.rv-viewer .rv-hl');
+ok('with "Open notes with" set, the button reads Open in editor', (await openBtn().textContent()) === 'Open in editor');
+await openBtn().click();
+ok('Open in editor opens the filled-in link', (await p.evaluate(() => window.__opened.pop())) === 'vscode://file/Users/me/Notes/My%20Vault/Zettel/Hiring%20neural.md');
+await p.evaluate(() => { window.__openWith = ''; });
 if (process.argv[2]) await p.screenshot({ path: process.argv[2].replace(/\.png$/, '-viewer.png') });
 // follow a wikilink inside the viewer
 await p.keyboard.press('Escape');
@@ -262,6 +286,48 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   ok('its row has Rescan and Remove inside the settings column', (await q.locator('.rv-settings-btns button').allTextContents()).join() === 'Rescan,Remove' && (await fits(q, 670)).inside && (await fits(q, 285)).inside);
   await q.evaluate(() => document.querySelector('.rv-settings-btns button').click());
   ok('its Rescan scans it and clears the mark', await rowHas(q, '1 note') && await q.evaluate(() => localStorage.getItem('roam-vaults:scanning:My Vault') === null));
+  await q.context().close();
+}
+{ // a crash can lose localStorage, so the mark is also kept in IndexedDB, written to disk at once
+  const putMark = (q, token) => q.evaluate((token) => new Promise((res, rej) => {
+    const r = indexedDB.open('roam-vaults-marks', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('scanning');
+    r.onsuccess = () => { const tx = r.result.transaction('scanning', 'readwrite'); tx.objectStore('scanning').put(token, 'My Vault'); tx.oncomplete = () => { r.result.close(); res(); }; tx.onerror = () => rej(tx.error); };
+  }), token);
+  const onloadSaved = (q) => q.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (key) { return key === 'vaults' ? { result: [{ id: 'My Vault', handle: vault }] } : get.call(this, key); };
+    window.__ext.onload({ extensionAPI: window.__api });
+  });
+  let q = await fresh();
+  await putMark(q, 't1');
+  await onloadSaved(q);
+  await mountSettings(q);
+  ok('a mark only in IndexedDB (localStorage lost in a crash) still stops the scan on load', await rowHas(q, "Last scan didn't finish"));
+  await q.context().close();
+  q = await fresh();
+  await putMark(q, 't2');
+  await q.evaluate(() => localStorage.setItem('roam-vaults:closed:My Vault', 't2'));
+  await onloadSaved(q);
+  await mountSettings(q);
+  ok('a mark whose scan was closed with Roam (not a crash) scans as usual', await rowHas(q, '1 note'));
+  await q.context().close();
+}
+{ // a scan writes its mark to IndexedDB with strict durability and deletes it when done
+  const q = await fresh();
+  await q.evaluate(() => {
+    window.__idb = [];
+    const tx = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = function (names, mode, opts) { if (String(names) === 'scanning' && mode === 'readwrite') window.__idb.push(opts?.durability); return tx.call(this, names, mode, opts); };
+    return window.__ext.onload({ extensionAPI: window.__api });
+  });
+  await mountSettings(q);
+  await press(q, 'Add vault folder');
+  await rowHas(q, '1 note');
+  await q.waitForTimeout(500);
+  const left = await q.evaluate(() => new Promise((res) => { const r = indexedDB.open('roam-vaults-marks', 1); r.onsuccess = () => { const g = r.result.transaction('scanning').objectStore('scanning').count(); g.onsuccess = () => { r.result.close(); res(g.result); }; }; }));
+  ok('the IndexedDB mark is written strictly while scanning and gone after', await q.evaluate(() => window.__idb.length >= 2 && window.__idb.every((d) => d === 'strict')) && left === 0);
   await q.context().close();
 }
 { // the mark is set while a scan runs and cleared when it ends

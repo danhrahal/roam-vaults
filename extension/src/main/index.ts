@@ -3,23 +3,14 @@
 import { loadVaults, saveVaults } from './store.ts';
 import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
+import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
 import { createSettingsPanel, type SettingsVault } from './settings.ts';
 import { ATTR, installStyles, renderPanel, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult } from '../engine.ts';
+import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
 
 declare const WORKER_SOURCE: string; // injected by build.mjs
 declare global { interface Window { roamAlphaAPI: any } }
-
-// ---------- scans that never finished ----------
-// The indexer runs in Roam's own process, so a scan that runs out of memory takes Roam down with it.
-// Every vault is scanned on load, so that scan would crash Roam again on every launch. A mark is kept
-// on this device while a scan runs; a vault whose mark is still there on load waits for Rescan.
-// localStorage, because it is written at once: a crash can come before an IndexedDB write lands.
-const scanMark = (id: string) => `roam-vaults:scanning:${id}`;
-function hasScanMark(id: string) { try { return localStorage.getItem(scanMark(id)) !== null; } catch { return false; } }
-function setScanMark(id: string, on: boolean) {
-  try { if (on) localStorage.setItem(scanMark(id), '1'); else localStorage.removeItem(scanMark(id)); } catch { /* storage blocked: no guard */ }
-}
 
 // ---------- one connected vault: its own indexer worker ----------
 let workerUrl = '';
@@ -35,7 +26,7 @@ class Vault implements PanelVault {
   private gen = 0;        // goes up whenever cached results go stale
   private opened = false; // has the worker been given the folder?
   private stopped = false;
-  private marked = false; // is this vault's scan mark set?
+  private token: string | null = null; // this vault's scan mark, while set (see scan-mark.ts)
 
   constructor(id: string, handle: FileSystemDirectoryHandle) {
     this.id = id; this.handle = handle; this.name = handle.name;
@@ -55,7 +46,8 @@ class Vault implements PanelVault {
     const viewer: ViewerActions = {
       read: (path) => this.call<string>('read', { path }),
       resolve: (target, from) => this.call<string | null>('resolve', { target, from }).catch(() => null),
-      openInObsidian: (path) => this.openInObsidian(path),
+      openOutside: (path) => this.openOutside(path),
+      openLabel: () => openLabel(openWith()),
     };
     this.act = {
       ...viewer,
@@ -94,9 +86,17 @@ class Vault implements PanelVault {
       this.set({ kind: 'ready', result: null, live });
     }
   }
-  /** Set or clear the scan mark (see hasScanMark). */
+  /** Set or clear the scan mark (see scan-mark.ts). */
   mark(on: boolean) {
-    if (on !== this.marked) { this.marked = on; setScanMark(this.id, on); }
+    if (on === (this.token !== null)) return;
+    this.token = on ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` : null;
+    void setScanMark(this.id, this.token);
+  }
+  /** Roam is closing or reloading mid-scan, which isn't a crash: the scan starts again next time. */
+  closing() {
+    if (this.state.kind !== 'indexing' || this.token === null) return;
+    closeScanMark(this.id, this.token);
+    this.token = null;
   }
   async connect(ask: boolean) {
     let allowed = false;
@@ -131,9 +131,10 @@ class Vault implements PanelVault {
     if (!this.opened || this.stopped) return;
     await this.call('rescan').catch(() => {}); // the worker reports a failed scan as an error status
   }
-  openInObsidian(path: string) {
+  /** Open the note in Obsidian, or in the editor the "Open notes with" setting names. */
+  openOutside(path: string) {
     const a = document.createElement('a');
-    a.href = `obsidian://open?vault=${encodeURIComponent(this.name)}&file=${encodeURIComponent(path.replace(/\.md$/i, ''))}`;
+    a.href = openLink(openWith(), this.name, path);
     a.rel = 'noopener';
     a.click();
   }
@@ -141,6 +142,8 @@ class Vault implements PanelVault {
 }
 
 let vaults: Vault[] = [];
+let settingsAPI: { get?(id: string): unknown } | undefined;
+const openWith = () => { try { return settingsAPI?.get?.(OPEN_WITH_SETTING); } catch { return undefined; } };
 // Vault management lives in the extension's settings page; it re-renders on every change.
 const listeners = new Set<() => void>();
 function changed() { listeners.forEach((fn) => fn()); }
@@ -245,6 +248,7 @@ let loads = 0; // goes up on every load and unload, so a load still in progress 
 async function onload({ extensionAPI }: { extensionAPI: any }) {
   const load = ++loads;
   cleanups.push(installStyles());
+  settingsAPI = extensionAPI?.settings;
   workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
 
   // No command palette entries (so no hotkeys either): vaults are managed in the settings panel.
@@ -261,7 +265,7 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
   mo.observe(document.body, { childList: true, subtree: true });
   cleanups.push(() => { mo.disconnect(); cancelAnimationFrame(frame); });
   // Closing or reloading Roam mid-scan isn't a crash: the scan starts again next time as usual.
-  const onHide = () => vaults.forEach((v) => { if (v.state.kind === 'indexing') v.mark(false); });
+  const onHide = () => vaults.forEach((v) => v.closing());
   window.addEventListener('pagehide', onHide);
   cleanups.push(() => window.removeEventListener('pagehide', onHide));
   const onHash = () => requestAnimationFrame(inject);
@@ -270,8 +274,10 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
 
   const saved = await loadVaults().catch(() => []);
   if (load !== loads) return; // unloaded while the saved vaults were being read
+  const unfinished = await unfinishedScans(saved.map((x) => x.id));
+  if (load !== loads) return;
   vaults = saved.map((x) => new Vault(x.id, x.handle));
-  for (const v of vaults) if (hasScanMark(v.id)) v.set({ kind: 'unfinished' });
+  for (const v of vaults) if (unfinished.has(v.id)) v.set({ kind: 'unfinished' });
   changed();
   inject();
   await Promise.all(vaults.map((v) => v.state.kind === 'unfinished' ? null : v.connect(false)));

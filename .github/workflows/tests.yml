@@ -1,0 +1,56 @@
+# Type check, unit tests and the headless-browser smoke test, on every push to main and every pull
+# request that touches the extension. The real-Roam run is in real-roam.yml.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extension/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'extension/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build and check the committed bundle is current
+        run: |
+          npm run build
+          git diff --exit-code -- dist || { echo "::error::dist/ is out of date: run npm run build and commit it."; exit 1; }
+
+      - name: Browser smoke test
+        run: node test/browser-smoke.mjs

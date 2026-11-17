@@ -40,10 +40,10 @@ const STYLES = `
 .rv-toast.rv-error{background:#a82a2a}
 .rv-overlay{position:fixed;inset:0;z-index:20000;background:rgba(16,22,26,.45);display:flex;align-items:center;justify-content:center}
 .rv-viewer{background:#fff;color:#182026;width:min(760px,92vw);max-height:86vh;display:flex;flex-direction:column;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.3)}
-.rv-viewer-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #e5e5ea}
+.rv-viewer-head{flex:none;display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #e5e5ea}
 .rv-viewer-head h3{margin:0;font-size:18px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rv-viewer-path{padding:4px 16px 0;color:#8a8a99;font-size:12px}
-.rv-viewer-body{padding:8px 20px 20px;overflow:auto;font-size:14px;line-height:1.55}
+.rv-viewer-path{flex:none;padding:4px 16px 0;color:#8a8a99;font-size:12px}
+.rv-viewer-body{min-height:0;padding:8px 20px 20px;overflow:auto;font-size:14px;line-height:1.55}
 .rv-viewer-body h1,.rv-viewer-body h2,.rv-viewer-body h3,.rv-viewer-body h4{margin:14px 0 6px}
 .rv-viewer-body p{margin:4px 0}
 .rv-viewer-body pre{background:#f5f8fa;padding:8px;border-radius:4px;overflow:auto;font-size:12px}
@@ -115,7 +115,8 @@ export interface SectionActions {
   reconnect(): void;
   remove(): void;
   view(path: string, line?: number): void;
-  openInObsidian(path: string): void;
+  openOutside(path: string): void;
+  openLabel(): string;
   read(path: string): Promise<string>;
   resolve(target: string, from: string): Promise<string | null>;
 }
@@ -172,7 +173,7 @@ function sectionHead(label: string, open = true, tools: HTMLElement[] = []) {
  *  then notes only tagged here. With more than one vault, each title starts with its vault name. */
 function resultBody(list: { v: PanelVault; r: PageResult }[], showVault: boolean): HTMLElement {
   const out = h('div', { class: 'rv-groups' });
-  /** One note: caret + (vault/)path as a namespaced title (+ tag); content shows when open. Open in Obsidian lives in the viewer. */
+  /** One note: caret + (vault/)path as a namespaced title (+ tag); content shows when open. The open-in-editor button lives in the viewer. */
   const group = (v: PanelVault, key: string, path: string, defOpen: boolean, extras: (Node | null)[], content: () => HTMLElement) => {
     const k = `${v.id}\n${key}\n${path}`;
     const box = h('div', { class: 'rv-content' });
@@ -247,7 +248,9 @@ function wireLinks(el: HTMLElement, from: string, open: (to: string) => void, re
 export interface ViewerActions {
   read(path: string): Promise<string>;
   resolve(target: string, from: string): Promise<string | null>;
-  openInObsidian(path: string): void;
+  /** Open the note in Obsidian or the editor set in "Open notes with". */
+  openOutside(path: string): void;
+  openLabel(): string;
 }
 let overlay: HTMLElement | null = null;
 const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); closeViewer(); } };
@@ -261,7 +264,7 @@ export async function openViewer(path: string, line: number | undefined, act: Vi
     h('div', { class: 'rv-viewer', role: 'dialog', 'aria-label': title },
       h('div', { class: 'rv-viewer-head' },
         h('h3', {}, title),
-        h('button', { class: 'bp3-button bp3-small', onclick: () => act.openInObsidian(path) }, 'Open in Obsidian'),
+        h('button', { class: 'bp3-button bp3-small', onclick: () => act.openOutside(path) }, act.openLabel()),
         h('button', { class: 'bp3-button bp3-small bp3-minimal', 'aria-label': 'Close', onclick: closeViewer }, '✕')),
       h('div', { class: 'rv-viewer-path' }, path),
       body));
@@ -271,7 +274,6 @@ export async function openViewer(path: string, line: number | undefined, act: Vi
     const text = await act.read(path);
     body.replaceChildren(renderMarkdown(text, line));
     wireLinks(body, path, (to) => openViewer(to, undefined, act), act.resolve);
-    body.querySelector('.rv-hl')?.scrollIntoView({ block: 'center' });
   } catch (e) {
     body.replaceChildren(`Couldn't read this note: ${(e as Error).message}`);
   }

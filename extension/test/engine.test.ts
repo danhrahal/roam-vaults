@@ -7,12 +7,26 @@ function memFS(files: Record<string, string>) {
   const data = new Map(Object.entries(files));
   const mtimes = new Map([...data.keys()].map((k) => [k, 1]));
   let reads = 0;
-  const fs: VaultFS & { write(p: string, t: string): void; rm(p: string): void; reads(): number } = {
-    async list() { return [...data].map(([path, t]): FileMeta => ({ path, size: t.length, mtime: mtimes.get(path)! })); },
+  const fs: VaultFS & { write(p: string, t: string): void; rm(p: string): void; mv(from: string, to: string): void; reads(): number; lists: string[] } = {
+    async list(folder = '') {
+      fs.lists.push(folder);
+      const all = [...data].filter(([path]) => !folder || path.startsWith(folder + '/'));
+      if (folder && !all.length) throw new DOMException('gone', 'NotFoundError');
+      return all.map(([path, t]): FileMeta => ({ path, size: t.length, mtime: mtimes.get(path)! }));
+    },
+    lists: [],
     async readText(p) { reads++; const t = data.get(p); if (t === undefined) throw new Error('missing'); return t; },
     async stat(p) { const t = data.get(p); return t === undefined ? null : { path: p, size: t.length, mtime: mtimes.get(p)! }; },
     write(p, t) { data.set(p, t); mtimes.set(p, (mtimes.get(p) ?? 0) + 1); },
     rm(p) { data.delete(p); mtimes.delete(p); },
+    /** Rename a file or a folder; moved files keep their size and time, as on disk. */
+    mv(from, to) {
+      for (const p of [...data.keys()]) {
+        if (p !== from && !p.startsWith(from + '/')) continue;
+        const q = to + p.slice(from.length);
+        data.set(q, data.get(p)!); mtimes.set(q, mtimes.get(p)!); data.delete(p); mtimes.delete(p);
+      }
+    },
     reads: () => reads,
   };
   return fs;
@@ -166,4 +180,90 @@ test('a page many notes link to keeps a bounded amount of note text', async () =
   const chars = [...kept.values()].reduce((a, t) => a + t.length, 0);
   assert.ok(chars <= 1_000_000 && chars === (e as any).textChars, `kept ${chars} characters`);
   assert.ok(!kept.has('Huge.md'), 'a very large note is not kept');
+});
+
+/** What a page shows, in a form two engines can be compared by. */
+async function shows(e: VaultEngine, titles: string[]) {
+  const out: Record<string, unknown> = {};
+  for (const t of titles) {
+    const r = await e.query(t);
+    out[t] = { c: r.counterparts.map((c) => [c.path, c.how]), b: r.backlinks.map((b) => [b.path, b.lines.map((l) => [l.line, l.text, l.unresolved])]), t: r.tagged.map((x) => x.path) };
+  }
+  return out;
+}
+const TITLES = ['Project Alpha', 'Alpha', 'Hiring neural', 'Ridley Scott', 'project/alpha', 'November 9th, 2026', 'Kept', 'Moved note', 'New idea'];
+/** The index a full scan of the same files builds. */
+async function fresh(fs: ReturnType<typeof memFS>) { const e = new VaultEngine(fs); await e.build(); return e; }
+
+test('a folder that appears is walked, with the notes inside it', async () => {
+  const fs = memFS(vault);
+  const e = await fresh(fs);
+  fs.lists.length = 0;
+  fs.write('Inbox/Deep/New idea.md', '- about [[Project Alpha]]\n- #project\n');
+  fs.write('Inbox/Deep/pic.png', '');
+  fs.write('Inbox/Other.md', '[[New idea]]\n');
+  const reads = fs.reads();
+  // the watcher reports the outer folder, and maybe a folder inside it too
+  assert.equal(await e.refreshFolders([{ path: 'Inbox/Deep' }, { path: 'Inbox' }]), true);
+  assert.deepEqual(fs.lists, ['Inbox'], 'only the outer folder is walked, once');
+  assert.equal(fs.reads() - reads, 2, 'only the new notes are read');
+  assert.deepEqual(await shows(e, TITLES), await shows(await fresh(fs), TITLES));
+  assert.ok(e.idx.files.has('Inbox/Deep/pic.png'));
+  assert.deepEqual([...e.unsaved.keys()].filter((p) => p.startsWith('Inbox')).sort(), ['Inbox/Deep/New idea.md', 'Inbox/Other.md']);
+  // walking it again changes nothing
+  assert.equal(await e.refreshFolders([{ path: 'Inbox' }]), false);
+});
+
+test('a folder that goes away takes its notes, and only its notes, with it', async () => {
+  const fs = memFS({ ...vault, 'Projects 2/Kept.md': '[[Project Alpha]]\n' });
+  const e = await fresh(fs);
+  e.unsaved.clear();
+  fs.rm('Projects/Project Alpha.md');
+  assert.equal(await e.refreshFolders([{ path: 'Projects' }]), true);
+  assert.ok(!e.idx.files.has('Projects/Project Alpha.md'));
+  assert.ok(e.idx.files.has('Projects 2/Kept.md'), 'a folder whose name starts the same is kept');
+  assert.deepEqual([...e.unsaved], [['Projects/Project Alpha.md', null]]);
+  assert.deepEqual(await shows(e, TITLES), await shows(await fresh(fs), TITLES));
+});
+
+test('a moved folder keeps its notes under the new name without reading them again', async () => {
+  const fs = memFS({ ...vault, 'Projects/Deep/Moved note.md': '[[Project Alpha]] and [[./Kept]]\n', 'Projects/Deep/Kept.md': 'kept\n' });
+  const e = await fresh(fs);
+  e.unsaved.clear();
+  fs.mv('Projects', 'Archive/Old projects');
+  const reads = fs.reads();
+  assert.equal(await e.refreshFolders([{ path: 'Archive/Old projects', from: 'Projects' }]), true);
+  assert.equal(fs.reads(), reads, 'nothing is read');
+  assert.ok(![...e.idx.files.keys()].some((p) => p.startsWith('Projects/')));
+  assert.equal(e.resolve('./Kept', 'Archive/Old projects/Deep/Moved note.md'), 'Archive/Old projects/Deep/Kept.md');
+  assert.deepEqual(await shows(e, TITLES), await shows(await fresh(fs), TITLES));
+  assert.deepEqual([...e.unsaved].map(([p, n]) => [p, n?.path ?? null]).sort(), [
+    ['Archive/Old projects/Deep/Kept.md', 'Archive/Old projects/Deep/Kept.md'],
+    ['Archive/Old projects/Deep/Moved note.md', 'Archive/Old projects/Deep/Moved note.md'],
+    ['Archive/Old projects/Project Alpha.md', 'Archive/Old projects/Project Alpha.md'],
+    ['Projects/Deep/Kept.md', null], ['Projects/Deep/Moved note.md', null], ['Projects/Project Alpha.md', null],
+  ]);
+  // a note edited during the move is read again
+  fs.mv('Archive/Old projects', 'Projects');
+  fs.write('Projects/Deep/Kept.md', 'edited on the way\n');
+  const reads2 = fs.reads();
+  await e.refreshFolders([{ path: 'Projects', from: 'Archive/Old projects' }]);
+  assert.equal(fs.reads(), reads2 + 1);
+  assert.deepEqual(await shows(e, TITLES), await shows(await fresh(fs), TITLES));
+});
+
+test('a folder event for a path that is a file, or that is gone, is handled', async () => {
+  const fs = memFS({ ...vault, 'LICENSE': 'MIT' });
+  const e = await fresh(fs);
+  // no such folder: nothing to do
+  assert.equal(await e.refreshFolders([{ path: 'Nowhere' }]), false);
+  // a file without an extension that went away
+  fs.rm('LICENSE');
+  assert.equal(await e.refreshFolders([{ path: 'LICENSE' }]), true);
+  assert.ok(!e.idx.files.has('LICENSE'));
+  // a folder that can't be listed for another reason keeps its notes until each is checked
+  const list = fs.list;
+  fs.list = async (f) => { if (f) throw new DOMException('denied', 'NotAllowedError'); return list(f); };
+  assert.equal(await e.refreshFolders([{ path: 'Zettel' }]), false);
+  assert.ok(e.idx.files.has('Zettel/Hiring neural.md'));
 });

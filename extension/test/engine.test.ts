@@ -104,3 +104,66 @@ test('custom daily format and resolve()', async () => {
   assert.equal(e.resolve('B', 'A.md'), 'sub/B.md');
   assert.equal(e.resolve('Nope', 'A.md'), null);
 });
+
+test('only changed notes are queued for the cache', async () => {
+  const fs = memFS(vault);
+  const e1 = new VaultEngine(fs);
+  await e1.build();
+  assert.deepEqual([...e1.unsaved.keys()].sort(), Object.keys(vault).filter((p) => p.endsWith('.md')).sort());
+  assert.ok([...e1.unsaved.values()].every((n) => n && n.size > 0 && n.mtime === 1));
+
+  // nothing changed: nothing to write
+  const e2 = new VaultEngine(fs);
+  await e2.build(e1.cache);
+  assert.equal(e2.unsaved.size, 0);
+
+  // an edit, a new note and a delete queue exactly those three
+  fs.write('Zettel/Hiring neural.md', 'rewritten\n');
+  fs.write('Inbox/new.md', '[[Project Alpha]]\n');
+  fs.rm('People/Someone.md');
+  await e2.refresh(['Zettel/Hiring neural.md', 'Inbox/new.md', 'People/Someone.md', 'Daily/2026-11-09.md', 'img/diagram.png']);
+  assert.deepEqual([...e2.unsaved].map(([p, n]) => [p, n === null ? null : n.path]).sort(), [
+    ['Inbox/new.md', 'Inbox/new.md'], ['People/Someone.md', null], ['Zettel/Hiring neural.md', 'Zettel/Hiring neural.md'],
+  ]);
+
+  // a rescan finds what changed while nothing was watching, and drops notes that are gone
+  fs.write('Daily/2026-11-09.md', 'changed while Roam was closed\n');
+  fs.rm('project alpha.md');
+  const e3 = new VaultEngine(fs);
+  const s3 = await e3.build(e2.cache);
+  assert.equal(s3.reread, 1);
+  assert.deepEqual([...e3.unsaved].map(([p, n]) => [p, n !== null]).sort(), [['Daily/2026-11-09.md', true], ['project alpha.md', false]]);
+  assert.ok(!e3.cache.has('project alpha.md') && e3.cache.has('Inbox/new.md'));
+});
+
+test('snippets come from the right line, and note text is read once while it stays unchanged', async () => {
+  const long = Array.from({ length: 400 }, (_, i) => (i === 250 ? '- deep down [[Target]] here\r' : `filler line ${i}`)).join('\n');
+  const fs = memFS({ 'Target.md': 'x', 'Long.md': long, 'Last.md': 'first\n\n[[Target]]', 'One.md': '[[Target]] start' });
+  const e = new VaultEngine(fs);
+  await e.build();
+  const lines = async () => Object.fromEntries((await e.query('Target')).backlinks.map((b) => [b.path, b.lines.map((l) => [l.line, l.text])]));
+  const want = { 'Last.md': [[2, '[[Target]]']], 'Long.md': [[250, 'deep down [[Target]] here']], 'One.md': [[0, '[[Target]] start']] };
+  assert.deepEqual(await lines(), want);
+  const reads = fs.reads();
+  assert.deepEqual(await lines(), want);
+  assert.equal(fs.reads(), reads, 'a second look at the same page reads nothing');
+  fs.write('One.md', 'moved\n[[Target]] down a line');
+  await e.refresh(['One.md']);
+  assert.deepEqual((await lines())['One.md'], [[1, '[[Target]] down a line']]);
+});
+
+test('a page many notes link to keeps a bounded amount of note text', async () => {
+  const files: Record<string, string> = { 'Hub.md': 'hub' };
+  const body = 'x'.repeat(20_000);
+  for (let i = 0; i < 150; i++) files[`n/Note ${String(i).padStart(3, '0')}.md`] = `[[Hub]] from ${i}\n${body}`;
+  files['Huge.md'] = `${'y'.repeat(400_000)}\n[[Hub]] at the end`;
+  const e = new VaultEngine(memFS(files));
+  await e.build();
+  const r = await e.query('Hub');
+  assert.equal(r.backlinks.length, 151);
+  assert.ok(r.backlinks.every((b) => b.lines[0].text.startsWith('[[Hub]]')));
+  const kept = (e as any).texts as Map<string, string>;
+  const chars = [...kept.values()].reduce((a, t) => a + t.length, 0);
+  assert.ok(chars <= 1_000_000 && chars === (e as any).textChars, `kept ${chars} characters`);
+  assert.ok(!kept.has('Huge.md'), 'a very large note is not kept');
+});

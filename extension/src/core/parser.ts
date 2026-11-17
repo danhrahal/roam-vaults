@@ -145,6 +145,10 @@ export function intern(s: string): string {
   return v;
 }
 
+/** Forget the interned strings. The table only needs to live while notes are being parsed
+ *  or loaded together; what was built from them keeps the strings it uses. */
+export function clearInterned() { INTERN.clear(); }
+
 function lineIndex(text: string): number[] {
   const starts = [0];
   for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts.push(i + 1);

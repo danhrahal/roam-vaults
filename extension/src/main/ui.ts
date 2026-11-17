@@ -181,7 +181,12 @@ function resultBody(list: { v: PanelVault; r: PageResult }[], showVault: boolean
       box.hidden = !open;
       if (open && !box.childNodes.length) box.append(content());
     };
-    c.addEventListener('click', () => { const open = box.hidden; groupOpen.set(k, open); set(open); });
+    c.addEventListener('click', () => {
+      const open = box.hidden;
+      groupOpen.delete(k); groupOpen.set(k, open);
+      if (groupOpen.size > 500) groupOpen.delete(groupOpen.keys().next().value!);
+      set(open);
+    });
     set(groupOpen.get(k) ?? defOpen);
     return h('div', { class: 'rv-group' },
       h('div', { class: 'flex-h-box rv-group-head' }, c,

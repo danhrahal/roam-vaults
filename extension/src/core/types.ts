@@ -41,6 +41,19 @@ export interface ParsedNote {
   stats: { bytes: number; lines: number; deadRanges: number };
 }
 
+/** What the index keeps of a note. No text and no object per link: a large vault has
+ *  hundreds of thousands of links, and this is what stays in memory for all of them. */
+export interface Note {
+  path: string;          // vault-relative, '/'-separated, NFC
+  size: number;          // file size and modification time when it was parsed
+  mtime: number;
+  aliases: string[];
+  tags: string[];        // without '#', original case; frontmatter + inline
+  /** Flat pairs: link target ('' targets, which point at the note itself, are left out),
+   *  then line * 2 + (1 for an embed). */
+  links: (string | number)[];
+}
+
 export interface ParseOptions {
   snippets?: boolean;    // store a ~100 char context string per link
 }

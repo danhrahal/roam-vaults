@@ -89,29 +89,19 @@ export class SqlIndex extends VaultIndex {
     }
   }
   private linkName(target: string, src: string) { return baseOf(this.keyOf(target, src)); }
-  /** Remove a note's rows from link_names, found from the links the database has for it. */
-  private dropLinkNames(id: number, path: string) {
-    const json = this.one('SELECT links FROM notes WHERE id = ?', [id])?.[0];
-    if (json && json !== '[]') this.run('DELETE FROM link_names WHERE note = ? AND name IN (SELECT value FROM json_each(?))', [id, this.linkNames(JSON.parse(json), path)]);
-  }
-  /** The name keys of a note's links, each once, as JSON. */
-  private linkNames(links: (string | number)[], src: string): string {
-    const names = new Set<string>();
-    for (let i = 0; i < links.length; i += 2) names.add(this.linkName(links[i] as string, src));
-    return JSON.stringify([...names]);
-  }
-  /** A note's rows for link_names: [name key, its links as flat pairs], as JSON. */
-  private linksByName(links: (string | number)[], src: string): string {
+  /** A note's rows for link_names: name key, and its links as flat pairs. */
+  private linksByName(links: (string | number)[], src: string): [string, (string | number)[]][] {
     const by = new Map<string, (string | number)[]>();
     for (let i = 0; i < links.length; i += 2) {
       const name = this.linkName(links[i] as string, src);
       const at = by.get(name);
       if (at) at.push(links[i], links[i + 1]); else by.set(name, [links[i], links[i + 1]]);
     }
-    return JSON.stringify([...by]);
+    return [...by];
   }
   private addLinkNames(id: number, links: (string | number)[], src: string) {
-    if (links.length) this.run('INSERT INTO link_names(name, note, links) SELECT value ->> 0, ?, value -> 1 FROM json_each(?)', [id, this.linksByName(links, src)]);
+    const rows = this.linksByName(links, src).map(([name, l]) => [name, JSON.stringify(l)]);
+    if (rows.length) this.run('INSERT INTO link_names(note, name, links) SELECT ?, value ->> 0, value ->> 1 FROM json_each(?)', [id, JSON.stringify(rows)]);
   }
   private keyed(kind: number, key: string): readonly string[] {
     const out = this.col('SELECT f.path FROM note_keys k JOIN files f ON f.id = k.note WHERE k.kind = ? AND k.key = ? ORDER BY k.note', [kind, key]);
@@ -166,22 +156,48 @@ export class SqlIndex extends VaultIndex {
     this.named.clear();
     return this.one('INSERT INTO files(path, name) VALUES (?, ?) RETURNING id', [path, baseOf(fileKeyPath(path))])![0];
   }
-  override upsertNote(note: Note) {
-    let id = this.idOf(note.path);
-    const isNew = id === undefined;
+  override upsertNote(note: Note) { this.upsertNotes([note]); }
+  /**
+   * Add or update several notes at once. Each table gets one statement for the whole batch, with
+   * the rows sent as JSON and spread out by SQLite (json_each): a statement call costs far more
+   * than a row, so a scan goes in batches.
+   */
+  override upsertNotes(notes: Note[]) {
+    if (!notes.length) return;
     this.write();
-    if (isNew) id = this.addFile(note.path);
-    else {
-      this.dropLinkNames(id!, note.path);
-      this.run('DELETE FROM note_keys WHERE note = ? AND kind < ?', [id, MATCHER]);
+    const paths = JSON.stringify(notes.map((n) => n.path));
+    const ids = new Map<string, number>();
+    for (const [p, id] of this.rows('SELECT f.path, f.id FROM json_each(?) j JOIN files f ON f.path = j.value', [paths])) ids.set(p, id);
+    const known = new Set(ids.keys());
+    if (ids.size) {
+      const old = JSON.stringify([...ids.values()]);
+      this.run('DELETE FROM link_names WHERE note IN (SELECT value FROM json_each(?))', [old]);
+      this.run('DELETE FROM note_keys WHERE kind < ? AND note IN (SELECT value FROM json_each(?))', [MATCHER, old]);
     }
-    // Lists go over as JSON and are spread into rows by SQLite (json_each): a few calls per note.
-    this.run('INSERT OR REPLACE INTO notes(id, size, mtime, aliases, tags, links) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, note.size, note.mtime, JSON.stringify(note.aliases), JSON.stringify(note.tags), JSON.stringify(note.links)]);
-    this.addLinkNames(id!, note.links, note.path);
-    const keys = [...aliasKeys(note).map((k) => [ALIAS, k]), ...noteTagKeys(note).map((k) => [TAG, k])];
-    if (keys.length) this.run('INSERT OR IGNORE INTO note_keys(kind, key, note) SELECT value ->> 0, value ->> 1, ? FROM json_each(?)', [id, JSON.stringify(keys)]);
-    for (const fn of this.listeners) fn(note.path, isNew ? 'add' : 'update');
+    const added = notes.filter((n) => !known.has(n.path)).map((n) => [n.path, baseOf(fileKeyPath(n.path))]);
+    if (added.length) {
+      this.named.clear();
+      for (const [p, id] of this.rows('INSERT INTO files(path, name) SELECT value ->> 0, value ->> 1 FROM json_each(?) RETURNING path, id', [JSON.stringify(added)])) ids.set(p, id);
+    }
+    const rows: unknown[] = [], names: unknown[] = [], keys: unknown[] = [];
+    for (const n of notes) {
+      const id = ids.get(n.path)!;
+      rows.push([id, n.size, n.mtime, JSON.stringify(n.aliases), JSON.stringify(n.tags), JSON.stringify(n.links)]);
+      for (const [name, links] of this.linksByName(n.links, n.path)) names.push([id, name, JSON.stringify(links)]);
+      for (const k of aliasKeys(n)) keys.push([ALIAS, k, id]);
+      for (const k of noteTagKeys(n)) keys.push([TAG, k, id]);
+    }
+    this.run(`INSERT OR REPLACE INTO notes(id, size, mtime, aliases, tags, links)
+      SELECT value ->> 0, value ->> 1, value ->> 2, value ->> 3, value ->> 4, value ->> 5 FROM json_each(?)`, [JSON.stringify(rows)]);
+    if (names.length) this.run('INSERT INTO link_names(note, name, links) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', [JSON.stringify(names)]);
+    if (keys.length) this.run('INSERT OR IGNORE INTO note_keys(kind, key, note) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', [JSON.stringify(keys)]);
+    for (const n of notes) for (const fn of this.listeners) fn(n.path, known.has(n.path) ? 'update' : 'add');
+  }
+  /** Every note's file size and time, by path: what a scan checks each file against. */
+  override stamps(): Map<string, { size: number; mtime: number }> {
+    const out = new Map<string, { size: number; mtime: number }>();
+    for (const [p, size, mtime] of this.rows('SELECT f.path, n.size, n.mtime FROM files f JOIN notes n ON n.id = f.id')) out.set(p, { size, mtime });
+    return out;
   }
   override moveNote(from: string, to: string): boolean {
     const note = this.note(from);
@@ -192,7 +208,7 @@ export class SqlIndex extends VaultIndex {
     this.run('UPDATE files SET path = ?, name = ? WHERE id = ?', [to, baseOf(fileKeyPath(to)), id]);
     this.named.clear();
     // A link's name key can depend on the note's folder (./ and ../ links).
-    this.dropLinkNames(id, from);
+    this.run('DELETE FROM link_names WHERE note = ?', [id]);
     this.addLinkNames(id, note.links, to);
     for (const fn of this.listeners) fn(to, 'add');
     return true;
@@ -208,7 +224,7 @@ export class SqlIndex extends VaultIndex {
     for (const fn of this.listeners) fn(path, 'remove');
     this.write();
     const isNote = this.one('SELECT 1 FROM notes WHERE id = ?', [id]) !== undefined;
-    this.dropLinkNames(id, path);
+    this.run('DELETE FROM link_names WHERE note = ?', [id]);
     this.run('DELETE FROM note_keys WHERE note = ?', [id]);
     if (isNote) this.run('DELETE FROM notes WHERE id = ?', [id]);
     this.run('DELETE FROM files WHERE id = ?', [id]);

@@ -242,6 +242,10 @@ export class VaultIndex {
   keyPaths(key: string): readonly string[] { return this.extra.get(key) ?? NONE; }
   /** Are the matcher's keys made with these settings already there? Maps start empty: never. */
   keysMadeWith(_settings: string): boolean { return false; }
+  /** Add or update several notes. */
+  upsertNotes(notes: Note[]) { for (const n of notes) this.upsertNote(n); }
+  /** Every note's file size and time, by path. */
+  stamps(): Map<string, { size: number; mtime: number }> { return new Map(this.notes); }
   /** Move a note to a path that has no file, keeping what is known of it. False if there was none. */
   moveNote(from: string, to: string): boolean {
     const n = this.note(from);

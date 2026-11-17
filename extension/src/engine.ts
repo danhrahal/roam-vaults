@@ -4,6 +4,7 @@
 import { parseNote, clearInterned } from './core/parser.ts';
 import { VaultIndex, toNote } from './core/vault-index.ts';
 import { RoamMatcher, type NoteHow } from './core/matcher.ts';
+import { searchWords } from './core/search.ts';
 import type { Note } from './core/types.ts';
 
 export interface FileMeta { path: string; size: number; mtime: number }
@@ -29,6 +30,7 @@ export interface PageResult {
   backlinks: Backlink[];
   tagged: Tagged[];
 }
+export interface SearchHit { path: string; title: string; line: number; text: string }
 export interface BuildStats { notes: number; files: number; reread: number; cached: number; errors: string[]; ms: number }
 
 /** Tiers 1–5 of FEASIBILITY.md §5: the strong matches shown in the MVP. */
@@ -59,13 +61,19 @@ export class VaultEngine {
 
   private fs: VaultFS;
   private dailyFormats: string[];
-  constructor(fs: VaultFS, dailyFormats: string[] = ['YYYY-MM-DD']) { this.fs = fs; this.dailyFormats = dailyFormats; }
+  /** An index kept in place across scans (a database), or none: each scan builds a new one in memory. */
+  private store: VaultIndex | null;
+  constructor(fs: VaultFS, dailyFormats: string[] = ['YYYY-MM-DD'], store: VaultIndex | null = null) {
+    this.fs = fs; this.dailyFormats = dailyFormats; this.store = store;
+    if (store) { this.idx = store; store.preferNearby = true; }
+  }
 
   /** The parsed notes, for the next scan to start from. */
   get cache(): Cache { return this.idx.notes; }
 
   /** Full scan. Files whose size and mtime match the cache are not re-read. */
   async build(cache: Cache = new Map(), onProgress?: (done: number, total: number) => void, concurrency = 32): Promise<BuildStats> {
+    if (this.store) return this.buildInPlace(onProgress, concurrency);
     const t0 = Date.now();
     const all = await this.fs.list();
     const md = all.filter((f) => MD.test(f.path));
@@ -103,23 +111,72 @@ export class VaultEngine {
     return { notes: ok.length, files: all.length, reread, cached: ok.length - reread, errors, ms: Date.now() - t0 };
   }
 
+  /**
+   * Full scan into an index kept in place: the index is its own cache. Notes whose size and time
+   * match are not read; changed ones are written as they are read, and what is gone is removed at
+   * the end. Queries during the scan see a mix of old and new notes, each one whole.
+   */
+  private async buildInPlace(onProgress?: (done: number, total: number) => void, concurrency = 32): Promise<BuildStats> {
+    const t0 = Date.now();
+    const idx = this.store!;
+    // Before any note is written, so the matcher sees the ones added by this scan.
+    this.matcher ??= new RoamMatcher(idx, { dailyFormats: this.dailyFormats, sanitized: false });
+    const all = await this.fs.list();
+    const md = all.filter((f) => MD.test(f.path));
+    const errors: string[] = [];
+    let reread = 0, done = 0, i = 0, ok = 0;
+    const work = async () => {
+      while (i < md.length) {
+        const f = md[i++];
+        const c = idx.stampOf(f.path);
+        if (c && c.size === f.size && c.mtime === f.mtime) ok++;
+        else {
+          try {
+            const text = await this.fs.readText(f.path);
+            idx.upsertNote(toNote(parseNote(f.path, text), f.size, f.mtime), text);
+            reread++; ok++;
+          } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
+        }
+        if (++done % 50 === 0) onProgress?.(done, md.length);
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(concurrency, md.length || 1) }, work));
+      const seen = new Set<string>();
+      for (const f of all) {
+        seen.add(f.path);
+        if (!MD.test(f.path) && !idx.hasFile(f.path)) idx.addAttachment(f.path);
+      }
+      // A note that could not be read keeps what the index had for it, as a full scan in memory would not.
+      for (const p of idx.filePaths()) if (!seen.has(p)) idx.removeFile(p);
+    } finally { idx.flush(); }
+    this.texts.clear(); this.textChars = 0;
+    clearInterned();
+    onProgress?.(md.length, md.length);
+    return { notes: ok, files: all.length, reread, cached: ok - reread, errors, ms: Date.now() - t0 };
+  }
+
   /** Re-check specific paths after a watcher event. Returns true if anything changed. */
   async refresh(paths: string[]): Promise<boolean> {
+    try { return await this.refreshPaths(paths); } finally { this.idx.flush(); }
+  }
+  private async refreshPaths(paths: string[]): Promise<boolean> {
     let changed = false;
     for (const path of new Set(paths)) {
       this.forget(path);
       const meta = await this.fs.stat(path).catch(() => null);
-      const known = this.idx.files.has(path);
+      const known = this.idx.hasFile(path);
       if (!meta) {
         if (known) { this.idx.removeFile(path); if (MD.test(path)) this.unsaved.set(path, null); changed = true; }
         continue;
       }
       if (!MD.test(path)) { if (!known) { this.idx.addAttachment(path); changed = true; } continue; }
-      const c = this.idx.notes.get(path);
+      const c = this.idx.stampOf(path);
       if (c && c.size === meta.size && c.mtime === meta.mtime) continue;
       try {
-        const note = toNote(parseNote(path, await this.fs.readText(path)), meta.size, meta.mtime);
-        this.idx.upsertNote(note);
+        const text = await this.fs.readText(path);
+        const note = toNote(parseNote(path, text), meta.size, meta.mtime);
+        this.idx.upsertNote(note, text);
         this.unsaved.set(path, note);
         changed = true;
       } catch { /* half-written or placeholder file: the next event will retry */ }
@@ -135,6 +192,9 @@ export class VaultEngine {
    * new path instead of being read again. Returns true if anything changed.
    */
   async refreshFolders(folders: { path: string; from?: string }[], concurrency = 16): Promise<boolean> {
+    try { return await this.refreshFoldersNow(folders, concurrency); } finally { this.idx.flush(); }
+  }
+  private async refreshFoldersNow(folders: { path: string; from?: string }[], concurrency: number): Promise<boolean> {
     let changed = false;
     const walk = outermost(folders.map((f) => f.path));
     const clear = new Set<string>();
@@ -144,7 +204,7 @@ export class VaultEngine {
     for (const { path, from } of folders) {
       if (from === undefined || from === path) continue;
       clear.add(from);
-      for (const [p, n] of this.idx.notes) if (p.startsWith(from + '/')) reuse.set(path + p.slice(from.length), n);
+      for (const n of this.idx.notesIn(from)) reuse.set(path + n.path.slice(from.length), n);
     }
     const seen = new Map<string, FileMeta>();
     for (const dir of walk) {
@@ -154,11 +214,17 @@ export class VaultEngine {
         clear.add(dir);
       } catch (e) {
         if ((e as Error)?.name === 'NotFoundError') clear.add(dir);
-        else for (const p of this.idx.files.keys()) if (p.startsWith(dir + '/')) recheck.push(p);
+        else for (const p of this.idx.filePaths()) if (p.startsWith(dir + '/')) recheck.push(p);
       }
     }
+    // An index kept in place moves a note that is unchanged at its new path (keeping what it
+    // knows of the note's text), before what is gone is removed.
+    if (this.idx.inPlace) for (const [to, n] of reuse) {
+      const f = seen.get(to);
+      if (f && n.size === f.size && n.mtime === f.mtime && !this.idx.hasFile(to) && this.idx.moveNote(n.path, to)) changed = true;
+    }
     // What the index has in those folders and is no longer there.
-    for (const p of [...this.idx.files.keys()]) {
+    for (const p of this.idx.filePaths()) {
       if (seen.has(p) || !inFolder(p, clear)) continue;
       this.forget(p);
       this.idx.removeFile(p);
@@ -168,12 +234,14 @@ export class VaultEngine {
     const toRead: FileMeta[] = [];
     for (const f of seen.values()) {
       if (!MD.test(f.path)) {
-        if (!this.idx.files.has(f.path)) { this.idx.addAttachment(f.path); changed = true; }
+        if (!this.idx.hasFile(f.path)) { this.idx.addAttachment(f.path); changed = true; }
         continue;
       }
-      const c = this.idx.notes.get(f.path) ?? reuse.get(f.path);
+      const at = this.idx.stampOf(f.path);
+      if (at) { if (at.size !== f.size || at.mtime !== f.mtime) toRead.push(f); continue; }
+      // An index kept in place has moved what it could; the rest is read, for its text.
+      const c = this.idx.inPlace ? undefined : reuse.get(f.path);
       if (!c || c.size !== f.size || c.mtime !== f.mtime) { toRead.push(f); continue; }
-      if (c.path === f.path) continue;
       const note = { ...c, path: f.path };
       this.idx.upsertNote(note);
       this.unsaved.set(f.path, note);
@@ -185,17 +253,36 @@ export class VaultEngine {
         const f = toRead[i++];
         this.forget(f.path);
         try {
-          const note = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime);
-          this.idx.upsertNote(note);
+          const text = await this.fs.readText(f.path);
+          const note = toNote(parseNote(f.path, text), f.size, f.mtime);
+          this.idx.upsertNote(note, text);
           this.unsaved.set(f.path, note);
           changed = true;
         } catch { /* half-written or placeholder file: the next event will retry */ }
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, toRead.length) }, work));
-    if (await this.refresh(recheck)) changed = true;
+    if (await this.refreshPaths(recheck)) changed = true;
     clearInterned();
     return changed;
+  }
+
+  /** Notes whose text matches a full-text query, best first, each with its first matching line.
+   *  Null when the index keeps no text. */
+  async search(query: string, limit = 20): Promise<SearchHit[] | null> {
+    const found = this.idx.search(query, limit);
+    if (!found) return null;
+    const words = searchWords(query).map((w) => w.toLowerCase());
+    const hits: SearchHit[] = found.map((f) => ({ path: f.path, title: noteTitle(f.path), line: -1, text: '' }));
+    for (let i = 0; i < hits.length; i += READS_AT_ONCE) {
+      await Promise.all(hits.slice(i, i + READS_AT_ONCE).map(async (h) => {
+        const text = await this.text(h.path);
+        if (text === null) return;
+        const at = firstLineWith(text, words);
+        if (at) { h.line = at.line; h.text = snippet(at.text); }
+      }));
+    }
+    return hits;
   }
 
   /** Everything the vault knows about one Roam page title. */
@@ -268,6 +355,17 @@ export function outermost(folders: string[]): string[] {
 export function inFolder(path: string, folders: Set<string>): boolean {
   for (let i = path.indexOf('/'); i > 0; i = path.indexOf('/', i + 1)) if (folders.has(path.slice(0, i))) return true;
   return false;
+}
+
+/** The first line holding one of these words (lowercase), by prefix as the search matched them. */
+function firstLineWith(text: string, words: string[]): { line: number; text: string } | null {
+  if (!words.length) return null;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].toLowerCase();
+    if (words.some((w) => l.includes(w))) return { line: i, text: lines[i] };
+  }
+  return null;
 }
 
 /** One line of a text, without its line break. */

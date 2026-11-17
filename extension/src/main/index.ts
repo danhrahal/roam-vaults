@@ -8,8 +8,19 @@ import { createSettingsPanel, type SettingsVault } from './settings.ts';
 import { ATTR, installStyles, renderPanel, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult } from '../engine.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
+import { SQL_DIR, poolName } from '../sql/pool-name.ts';
+import type { SearchHit } from '../engine.ts';
 
 declare const WORKER_SOURCE: string; // injected by build.mjs
+declare const SQLITE_WASM: string;   // SQLite's .wasm, gzipped, base64: injected by build.mjs
+
+/** SQLite's wasm, compiled once and handed to every vault's worker. Null if it can't be. */
+let sqliteWasm: Promise<WebAssembly.Module | null> | null = null;
+const compileSqlite = () => sqliteWasm ??= (async () => {
+  const gz = Uint8Array.from(atob(SQLITE_WASM), (c) => c.charCodeAt(0));
+  const bytes = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  return WebAssembly.compile(bytes);
+})().catch((e) => { console.warn('[roam-vaults] SQLite not loaded', e); return null; });
 declare global { interface Window { roamAlphaAPI: any } }
 
 // ---------- one connected vault: its own indexer worker ----------
@@ -106,7 +117,7 @@ class Vault implements PanelVault {
     this.set({ kind: 'indexing', detail: '' });
     this.opened = true;
     try {
-      const stats: any = await this.call('open', { handle: this.handle, key: this.id });
+      const stats: any = await this.call('open', { handle: this.handle, key: this.id, wasm: await compileSqlite() });
       if (stats.errors?.length) console.warn('[roam-vaults] unreadable files in', this.name, stats.errors);
     } catch (e) {
       this.set({ kind: 'error', detail: (e as Error).message });
@@ -171,7 +182,12 @@ async function addVault() {
   await save();
   await v.connect(false);
 }
-const dropCache = (v: Vault) => deleteNotes(v.id).catch((e) => console.warn('[roam-vaults] cache not cleared', e));
+const dropCache = (v: Vault) => Promise.all([
+  deleteNotes(v.id).catch((e) => console.warn('[roam-vaults] cache not cleared', e)),
+  // The vault's SQLite database, once its worker has let go of it.
+  navigator.storage.getDirectory().then((d) => d.getDirectoryHandle(SQL_DIR)).then((d) => d.removeEntry(poolName(v.id), { recursive: true }))
+    .catch((e) => { if ((e as Error)?.name !== 'NotFoundError') console.warn('[roam-vaults] index not cleared', e); }),
+]);
 async function removeVault(v: Vault) {
   v.stop(); // terminates the worker first, so no pending cache save can recreate the entry
   await dropCache(v);
@@ -293,4 +309,19 @@ function onunload() {
   document.querySelectorAll(`[${ATTR}]`).forEach((n) => n.remove());
 }
 
-export default { onload, onunload };
+/** Full-text search over every connected vault, best first within each vault. A prototype with no
+ *  UI yet: reachable only from the extension module (used by test/memory-bench.mjs). */
+async function search(q: string, limit = 20): Promise<(SearchHit & { vault: string })[]> {
+  const each = await Promise.all(vaults.map(async (v) => {
+    if (v.state.kind !== 'ready') return [];
+    const hits = await v.call<SearchHit[] | null>('search', { q, limit }).catch(() => null);
+    return (hits ?? []).map((h) => ({ vault: v.name, ...h }));
+  }));
+  return each.flat();
+}
+/** What one vault knows about a page title, straight from its worker (for timing; see search). */
+async function query(title: string) {
+  return Promise.all(vaults.map((v) => v.call<PageResult | null>('query', { title }).catch(() => null)));
+}
+
+export default { onload, onunload, search, query };

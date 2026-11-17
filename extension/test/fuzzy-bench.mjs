@@ -143,7 +143,7 @@ const size0 = size();
 const ft = new FuzzyTitles(db);
 t0 = performance.now();
 db.exec('BEGIN');
-for (const n of notes) ft.put(n.id, n.path, n.aliases);
+for (const n of notes) ft.put(n.id, n.path, n.aliases, true);
 db.exec('COMMIT');
 const buildMs = performance.now() - t0;
 console.log(`\nSQLite ${sqlite3.version.libVersion}: first scan ${buildMs.toFixed(0)} ms (note by note, in one transaction, as a scan writes them); fuzzy tables ${MB(size() - size0)} MB of database (on OPFS only SQLite's 2 MB page cache stays in memory); wasm memory here ${MB(heap0)} -> ${MB(heap())} MB (database in memory)`);

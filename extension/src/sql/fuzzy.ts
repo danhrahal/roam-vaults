@@ -92,16 +92,23 @@ export class FuzzyTitles {
       const id = Number(idx.db.selectValue('SELECT id FROM files WHERE path = ?', [path]));
       if (!id) return;
       if (kind === 'remove') f.remove(id);
-      else f.put(id, path, idx.note(path)?.aliases ?? []);
+      else f.put(id, path, idx.note(path)?.aliases ?? [], kind === 'add');
     });
     return f;
   }
 
   /** Replace the keys of one note (by its id): its file name and its aliases. Run it inside a
-   *  write transaction: on its own each call is a transaction, about half a millisecond. */
-  put(note: number, path: string, aliases: readonly string[] = []) {
-    this.remove(note);
-    for (const [z, kind] of keysOf(path, aliases)) this.ins.bind([note, kind, z]).stepReset();
+   *  write transaction: on its own each call is a transaction, about half a millisecond. isNew: the
+   *  note has no rows yet (a new file, or the second half of a move). */
+  put(note: number, path: string, aliases: readonly string[] = [], isNew = false) {
+    const keys = keysOf(path, aliases);
+    if (isNew) { for (const [z, kind] of keys) this.ins.bind([note, kind, z]).stepReset(); return; }
+    // A note whose name and aliases didn't change (an edit, a Rescan) keeps its rows: one lookup
+    // instead of rewriting its trigrams.
+    const had = this.db.selectArrays('SELECT z, kind FROM fuzzy_name WHERE note = ?', [note]) as [string, number][];
+    if (had.length === keys.size && had.every(([z, kind]) => keys.get(z) === kind)) return;
+    if (had.length) this.remove(note);
+    for (const [z, kind] of keys) this.ins.bind([note, kind, z]).stepReset();
   }
   remove(note: number) {
     this.del.bind([note]).stepReset();

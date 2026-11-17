@@ -15,6 +15,9 @@ npm test             # engine and parser tests (Node 22+)
 npm run typecheck
 npm run build        # writes dist/extension.js and copies README.md and CHANGELOG.md into dist/
 npm run test:browser # builds, then runs a headless browser smoke test
+
+The Tests workflow (`.github/workflows/tests.yml`) runs the type check, unit tests and smoke test on
+GitHub Actions for every pull request and push to main, and fails if `dist/` is out of date.
 ```
 
 `./build.sh` is what Roam Depot runs (see [docs/DEPOT-SUBMISSION.md](../docs/DEPOT-SUBMISSION.md)). It

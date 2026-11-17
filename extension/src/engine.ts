@@ -4,7 +4,6 @@
 import { parseNote, clearInterned } from './core/parser.ts';
 import { VaultIndex, toNote } from './core/vault-index.ts';
 import { RoamMatcher, type NoteHow } from './core/matcher.ts';
-import { searchWords } from './core/search.ts';
 import type { Note } from './core/types.ts';
 
 export interface FileMeta { path: string; size: number; mtime: number }
@@ -30,7 +29,6 @@ export interface PageResult {
   backlinks: Backlink[];
   tagged: Tagged[];
 }
-export interface SearchHit { path: string; title: string; line: number; text: string }
 export interface BuildStats { notes: number; files: number; reread: number; cached: number; errors: string[]; ms: number }
 
 /** Tiers 1–5 of FEASIBILITY.md §5: the strong matches shown in the MVP. */
@@ -132,8 +130,7 @@ export class VaultEngine {
         if (c && c.size === f.size && c.mtime === f.mtime) ok++;
         else {
           try {
-            const text = await this.fs.readText(f.path);
-            idx.upsertNote(toNote(parseNote(f.path, text), f.size, f.mtime), text);
+            idx.upsertNote(toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime));
             reread++; ok++;
           } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
         }
@@ -174,9 +171,8 @@ export class VaultEngine {
       const c = this.idx.stampOf(path);
       if (c && c.size === meta.size && c.mtime === meta.mtime) continue;
       try {
-        const text = await this.fs.readText(path);
-        const note = toNote(parseNote(path, text), meta.size, meta.mtime);
-        this.idx.upsertNote(note, text);
+        const note = toNote(parseNote(path, await this.fs.readText(path)), meta.size, meta.mtime);
+        this.idx.upsertNote(note);
         this.unsaved.set(path, note);
         changed = true;
       } catch { /* half-written or placeholder file: the next event will retry */ }
@@ -253,9 +249,8 @@ export class VaultEngine {
         const f = toRead[i++];
         this.forget(f.path);
         try {
-          const text = await this.fs.readText(f.path);
-          const note = toNote(parseNote(f.path, text), f.size, f.mtime);
-          this.idx.upsertNote(note, text);
+          const note = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime);
+          this.idx.upsertNote(note);
           this.unsaved.set(f.path, note);
           changed = true;
         } catch { /* half-written or placeholder file: the next event will retry */ }
@@ -265,24 +260,6 @@ export class VaultEngine {
     if (await this.refreshPaths(recheck)) changed = true;
     clearInterned();
     return changed;
-  }
-
-  /** Notes whose text matches a full-text query, best first, each with its first matching line.
-   *  Null when the index keeps no text. */
-  async search(query: string, limit = 20): Promise<SearchHit[] | null> {
-    const found = this.idx.search(query, limit);
-    if (!found) return null;
-    const words = searchWords(query).map((w) => w.toLowerCase());
-    const hits: SearchHit[] = found.map((f) => ({ path: f.path, title: noteTitle(f.path), line: -1, text: '' }));
-    for (let i = 0; i < hits.length; i += READS_AT_ONCE) {
-      await Promise.all(hits.slice(i, i + READS_AT_ONCE).map(async (h) => {
-        const text = await this.text(h.path);
-        if (text === null) return;
-        const at = firstLineWith(text, words);
-        if (at) { h.line = at.line; h.text = snippet(at.text); }
-      }));
-    }
-    return hits;
   }
 
   /** Everything the vault knows about one Roam page title. */
@@ -355,17 +332,6 @@ export function outermost(folders: string[]): string[] {
 export function inFolder(path: string, folders: Set<string>): boolean {
   for (let i = path.indexOf('/'); i > 0; i = path.indexOf('/', i + 1)) if (folders.has(path.slice(0, i))) return true;
   return false;
-}
-
-/** The first line holding one of these words (lowercase), by prefix as the search matched them. */
-function firstLineWith(text: string, words: string[]): { line: number; text: string } | null {
-  if (!words.length) return null;
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i].toLowerCase();
-    if (words.some((w) => l.includes(w))) return { line: i, text: lines[i] };
-  }
-  return null;
 }
 
 /** One line of a text, without its line break. */

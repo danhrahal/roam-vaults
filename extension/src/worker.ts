@@ -334,7 +334,6 @@ const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
   query: ({ title }) => engine ? engine.query(title) : null,
   read: ({ path }) => engine!.read(path),
   resolve: ({ target, from }) => engine?.resolve(target, from) ?? null,
-  search: ({ q, limit }) => engine ? engine.search(q, limit) : null,
   close() { observer?.disconnect(); observer = null; engine = null; root = null; store?.close(); store = null; return true; },
 };
 

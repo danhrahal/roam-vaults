@@ -1,13 +1,10 @@
 // The vault index kept in SQLite instead of in JavaScript maps: same lookups, same link resolution
-// (VaultIndex.candidates and its Obsidian tie-break rules are inherited unchanged), plus a full-text
-// index of the notes. The database is kept across starts, so it is also the parse cache: a note
-// whose size and time match is not read again. Runs in the indexer worker.
+// (VaultIndex.candidates and its Obsidian tie-break rules are inherited unchanged). The database is
+// kept across starts, so it is also the parse cache: a note whose size and time match is not read
+// again. Runs in the indexer worker.
 import { VaultIndex, NONE, baseOf, fileKeyPath, aliasKeys, noteTagKeys } from '../core/vault-index.ts';
-import { ftsQuery } from '../core/search.ts';
 import type { Note } from '../core/types.ts';
 
-const MD = /\.md$/i;
-const titleOf = (path: string) => baseOf(path).replace(MD, '');
 const ALIAS = 0, TAG = 1, MATCHER = 2;
 const WRITES_PER_COMMIT = 20000;
 
@@ -163,23 +160,13 @@ export class SqlIndex extends VaultIndex {
     return false;
   }
 
-  // ---------- full text ----------
-  override search(query: string, limit: number): { path: string; score: number }[] {
-    const q = ftsQuery(query);
-    if (!q) return [];
-    this.flush(); // what was just written is searchable
-    return this.rows(
-      'SELECT f.path, s.rank FROM (SELECT rowid, rank FROM note_fts WHERE note_fts MATCH ? ORDER BY rank LIMIT ?) s JOIN files f ON f.id = s.rowid ORDER BY s.rank',
-      [q, limit]).map(([path, score]) => ({ path, score }));
-  }
-
   // ---------- changes ----------
   private addFile(path: string): number {
     this.write();
     this.named.clear();
     return this.one('INSERT INTO files(path, name) VALUES (?, ?) RETURNING id', [path, baseOf(fileKeyPath(path))])![0];
   }
-  override upsertNote(note: Note, text?: string) {
+  override upsertNote(note: Note) {
     let id = this.idOf(note.path);
     const isNew = id === undefined;
     this.write();
@@ -194,16 +181,9 @@ export class SqlIndex extends VaultIndex {
     this.addLinkNames(id!, note.links, note.path);
     const keys = [...aliasKeys(note).map((k) => [ALIAS, k]), ...noteTagKeys(note).map((k) => [TAG, k])];
     if (keys.length) this.run('INSERT OR IGNORE INTO note_keys(kind, key, note) SELECT value ->> 0, value ->> 1, ? FROM json_each(?)', [id, JSON.stringify(keys)]);
-    if (text !== undefined) {
-      if (!isNew) this.run('DELETE FROM note_fts WHERE rowid = ?', [id]);
-      this.run('INSERT INTO note_fts(rowid, title, body) VALUES (?, ?, ?)', [id, titleOf(note.path), text]);
-    }
     for (const fn of this.listeners) fn(note.path, isNew ? 'add' : 'update');
   }
   override moveNote(from: string, to: string): boolean {
-    // The text index holds the title, and a contentless index can't change one column: a note
-    // whose own name changes is read again instead.
-    if (titleOf(from) !== titleOf(to)) return false;
     const note = this.note(from);
     if (!note || this.hasFile(to)) return false;
     const id = this.idOf(from)!;
@@ -211,8 +191,7 @@ export class SqlIndex extends VaultIndex {
     this.write();
     this.run('UPDATE files SET path = ?, name = ? WHERE id = ?', [to, baseOf(fileKeyPath(to)), id]);
     this.named.clear();
-    // A link's name key can depend on the note's folder (./ and ../ links). The text index row
-    // stays as it is: same id, same title, same text.
+    // A link's name key can depend on the note's folder (./ and ../ links).
     this.dropLinkNames(id, from);
     this.addLinkNames(id, note.links, to);
     for (const fn of this.listeners) fn(to, 'add');
@@ -231,10 +210,7 @@ export class SqlIndex extends VaultIndex {
     const isNote = this.one('SELECT 1 FROM notes WHERE id = ?', [id]) !== undefined;
     this.dropLinkNames(id, path);
     this.run('DELETE FROM note_keys WHERE note = ?', [id]);
-    if (isNote) {
-      this.run('DELETE FROM notes WHERE id = ?', [id]);
-      this.run('DELETE FROM note_fts WHERE rowid = ?', [id]);
-    }
+    if (isNote) this.run('DELETE FROM notes WHERE id = ?', [id]);
     this.run('DELETE FROM files WHERE id = ?', [id]);
     this.named.clear();
   }

@@ -242,8 +242,6 @@ export class VaultIndex {
   keyPaths(key: string): readonly string[] { return this.extra.get(key) ?? NONE; }
   /** Are the matcher's keys made with these settings already there? Maps start empty: never. */
   keysMadeWith(_settings: string): boolean { return false; }
-  /** Note text matching a full-text query, best first. Only a store with a text index has any. */
-  search(_query: string, _limit: number): { path: string; score: number }[] | null { return null; }
   /** Move a note to a path that has no file, keeping what is known of it. False if there was none. */
   moveNote(from: string, to: string): boolean {
     const n = this.note(from);
@@ -269,7 +267,7 @@ export class VaultIndex {
   }
 
   /** Add or update a note. */
-  upsertNote(note: Note, _text?: string) {
+  upsertNote(note: Note) {
     const isNew = !this.files.has(note.path);
     if (isNew) this.register(note.path); else this.removeContrib(note.path);
     this.notes.set(note.path, note);

@@ -65,8 +65,8 @@ The design and measurements are in [docs/FEASIBILITY.md](../docs/FEASIBILITY.md)
 
 ## SQLite index (prototype)
 
-On this branch the worker keeps the index in SQLite instead of JavaScript maps, and adds a full-text index of
-the notes. Nothing in the UI uses search yet; `search(q, limit)` is exported from the extension module.
+On this branch the worker keeps the index in SQLite instead of JavaScript maps. Full-text search over the
+notes was prototyped on top of it and taken out again (on the backlog); its code is in commit 1b8305b.
 
 - SQLite is the official WebAssembly build, `@sqlite.org/sqlite-wasm` (pinned). `build.mjs` gzips its `.wasm`
   and inlines it in `extension.js` as base64 (Roam Depot allows no code from the network). The page compiles it
@@ -78,11 +78,9 @@ the notes. Nothing in the UI uses search yet; `search(q, limit)` is exported fro
 - The tables are in `sql/schema.ts`: add a step at the end of `MIGRATIONS`. `SqlIndex` (`sql/sql-index.ts`)
   overrides the lookups `VaultIndex` makes (`pathsNamed`, `eachLinker`, `aliasPaths`, ...), so link resolution
   and its tie-break rules are the same code. `test/sql.test.ts` checks both indexes answer every query the same.
-- The database is the parse cache: it is updated in place by each scan (`VaultEngine.buildInPlace`), and the
-  IndexedDB cache is not used. Writes are batched in a transaction that `flush()` commits.
-- Note text goes into a contentless FTS5 table (`detail=column`, `unicode61 remove_diacritics 2`): the index
-  only, not the text. Search takes every word, the last one as a prefix, and ranks with bm25, titles weighted 10.
-  The line shown for each hit is read from the note.
+- The database is the parse cache: each scan updates it in place (`VaultEngine.buildInPlace`), and the
+  IndexedDB cache is dropped. Writes are batched in a transaction that `flush()` commits. A scan that stops
+  part way leaves the notes it wrote, so the next one carries on from there.
 
 ## Real Roam run (GitHub Actions)
 

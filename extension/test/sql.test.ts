@@ -162,31 +162,3 @@ test('the daily format can change between scans', async () => {
   await b.build();
   assert.deepEqual((await b.query('November 9th, 2026')).counterparts.map((c) => c.path), ['J/09-11-2026.md']);
 });
-
-test('full-text search: words in any order, last word as a prefix, titles first', async () => {
-  const fs = memFS({
-    'Recipes/Pancakes.md': '# Pancakes\nFlour, eggs and milk.\nWhisk until smooth.\n',
-    'Notes/Breakfast.md': 'Sunday: pancakes with blueberries.\n',
-    'Notes/Café visit.md': 'Le café était très bon.\n',
-    'Other.md': 'nothing here\n',
-  });
-  const sql = await sqlEngine(fs);
-  await sql.build();
-  const hits = (await sql.search('pancakes'))!;
-  assert.deepEqual(hits.map((h) => h.path), ['Recipes/Pancakes.md', 'Notes/Breakfast.md'], 'the title weighs more');
-  assert.deepEqual(hits[1], { path: 'Notes/Breakfast.md', title: 'Breakfast', line: 0, text: 'Sunday: pancakes with blueberries.' });
-  assert.deepEqual((await sql.search('eggs whi'))!.map((h) => h.path), ['Recipes/Pancakes.md']);
-  assert.deepEqual((await sql.search('cafe'))!.map((h) => h.path), ['Notes/Café visit.md'], 'accents are ignored');
-  assert.deepEqual((await sql.search('"); DROP TABLE notes; --'))!, [], 'what is typed is never SQL or FTS syntax');
-  assert.deepEqual(await sql.search('  '), []);
-  // edits are searchable right away
-  fs.write('Other.md', 'now about pancakes too');
-  await sql.refresh(['Other.md']);
-  assert.equal((await sql.search('pancakes'))!.length, 3);
-  fs.rm('Recipes/Pancakes.md');
-  await sql.refresh(['Recipes/Pancakes.md']);
-  assert.deepEqual((await sql.search('flour'))!, []);
-  // the in-memory index has no text
-  const mem = new VaultEngine(fs); await mem.build();
-  assert.equal(await mem.search('pancakes'), null);
-});

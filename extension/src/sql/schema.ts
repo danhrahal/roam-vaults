@@ -26,11 +26,6 @@ export const MIGRATIONS: ((db: Db) => void)[] = [
     CREATE TABLE note_keys(kind INTEGER NOT NULL, key TEXT NOT NULL, note INTEGER NOT NULL,
       PRIMARY KEY(kind, key, note)) WITHOUT ROWID;
     CREATE INDEX note_keys_note ON note_keys(note);
-    -- Full-text index of each note's title and text. Contentless: the text stays in the vault and
-    -- is read from there for the lines shown, so the database holds only the index.
-    CREATE VIRTUAL TABLE note_fts USING fts5(title, body, content='', contentless_delete=1,
-      tokenize='unicode61 remove_diacritics 2', detail=column);
-    INSERT INTO note_fts(note_fts, rank) VALUES('rank', 'bm25(10.0, 1.0)');
   `),
 ];
 

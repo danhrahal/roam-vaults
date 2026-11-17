@@ -292,7 +292,7 @@ const heads = {};
 for (const t of titles) heads[t] = await visit(p, t);
 console.log(`visited ${titles.length} pages, ${Object.values(heads).filter(Boolean).length} with references`);
 await settle(p, 'after visiting 40 pages');
-// Query and search times, straight from the workers, where the build exports them.
+// Page lookup times, straight from the workers, where the build exports them.
 const timing = await p.evaluate(async (titles) => {
   const ext = window.__ext, out = {};
   const time = async (fn, n) => {
@@ -302,13 +302,6 @@ const timing = await p.evaluate(async (titles) => {
     return { medianMs: +xs[xs.length >> 1].toFixed(1), p95Ms: +xs[Math.floor(xs.length * 0.95)].toFixed(1) };
   };
   if (ext.query) out.pageQuery = await time((i) => ext.query(titles[i % titles.length]), 80);
-  if (ext.search) {
-    const qs = ['alpha', 'meeting notes', 'budget review plan', 'neur', 'roadmap quarterly', 'zzzz', 'Research market customer product'];
-    out.search = await time((i) => ext.search(qs[i % qs.length]), 70);
-    out.hits = {}; // up to 50: every hit's line is read from its note
-    for (const q of qs) out.hits[q] = (await ext.search(q, 50)).length;
-    out.sample = (await ext.search('budget review', 3)).map((h) => `${h.path}:${h.line} ${h.text.slice(0, 60)}`);
-  }
   return out;
 }, titles);
 console.log(JSON.stringify(timing));

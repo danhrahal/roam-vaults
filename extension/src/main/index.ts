@@ -9,7 +9,6 @@ import { ATTR, installStyles, renderPanel, notify, removeToast, openViewer, clos
 import type { PageResult } from '../engine.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
 import { SQL_DIR, poolName } from '../sql/pool-name.ts';
-import type { SearchHit } from '../engine.ts';
 
 declare const WORKER_SOURCE: string; // injected by build.mjs
 declare const SQLITE_WASM: string;   // SQLite's .wasm, gzipped, base64: injected by build.mjs
@@ -312,19 +311,10 @@ function onunload() {
   document.querySelectorAll(`[${ATTR}]`).forEach((n) => n.remove());
 }
 
-/** Full-text search over every connected vault, best first within each vault. A prototype with no
- *  UI yet: reachable only from the extension module (used by test/memory-bench.mjs). */
-async function search(q: string, limit = 20): Promise<(SearchHit & { vault: string })[]> {
-  const each = await Promise.all(vaults.map(async (v) => {
-    if (v.state.kind !== 'ready') return [];
-    const hits = await v.call<SearchHit[] | null>('search', { q, limit }).catch(() => null);
-    return (hits ?? []).map((h) => ({ vault: v.name, ...h }));
-  }));
-  return each.flat();
-}
-/** What one vault knows about a page title, straight from its worker (for timing; see search). */
+/** What each vault knows about a page title, straight from its worker. No UI: exported from the
+ *  extension module for timing (test/memory-bench.mjs). */
 async function query(title: string) {
   return Promise.all(vaults.map((v) => v.call<PageResult | null>('query', { title }).catch(() => null)));
 }
 
-export default { onload, onunload, search, query };
+export default { onload, onunload, query };

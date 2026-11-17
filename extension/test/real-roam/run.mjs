@@ -305,12 +305,34 @@ async function addVault(dir) {
   await clickButton('Add vault folder');
 }
 async function clearExtensionState() {
-  // Only matters when the same Roam profile is reused (a fresh CI runner has none of this).
+  // Only matters when the same Roam profile is reused (a fresh CI runner has none of this). If the
+  // extension is already loaded it holds its databases open, so remove its vaults through settings.
+  await openSettings();
+  if (await clickLeaf('Vaults (dev)')) {
+    await waitFor('the vault list', () => evalIn(() => !!document.querySelector('.rv-settings')), 10000);
+    for (let i = 0; i < 20 && (await evalIn(() => document.querySelectorAll('.rv-settings-row').length)); i++) {
+      await evalIn(() => [...document.querySelector('.rv-settings-row').querySelectorAll('button')].find((b) => b.innerText.trim() === 'Remove')?.click());
+      await sleep(500);
+    }
+    log('removed vaults left by an earlier run');
+  }
+  await dismissDialogs();
   await evalIn(async () => {
     for (const k of Object.keys(localStorage)) if (k.startsWith('roam-vaults')) localStorage.removeItem(k);
-    for (const db of ['roam-vaults', 'roam-vaults-cache']) await new Promise((r) => { const q = indexedDB.deleteDatabase(db); q.onsuccess = q.onerror = q.onblocked = r; });
+    for (const db of ['roam-vaults', 'roam-vaults-cache', 'roam-vaults-marks']) await new Promise((r) => { const q = indexedDB.deleteDatabase(db); q.onsuccess = q.onerror = q.onblocked = r; });
   });
 }
+/** Is the vault's scan mark set? It's in localStorage, or (since the crash-mark fix) in IndexedDB. */
+const scanMarked = (id) => evalIn(async (id) => {
+  if (localStorage.getItem(`roam-vaults:scanning:${id}`) !== null) return true;
+  // never open a database that doesn't exist yet: that would create it without its store
+  if (!(await indexedDB.databases()).some((d) => d.name === 'roam-vaults-marks')) return false;
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('roam-vaults-marks'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  try {
+    if (!db.objectStoreNames.contains('scanning')) return false;
+    return await new Promise((res) => { const q = db.transaction('scanning').objectStore('scanning').get(id); q.onsuccess = () => res(q.result != null); q.onerror = () => res(false); });
+  } finally { db.close(); }
+}, id);
 const touchAll = (dir) => { const t = new Date(); for (const f of fs.readdirSync(dir, { recursive: true })) { const p = path.join(dir, f); if (fs.statSync(p).isFile()) fs.utimesSync(p, t, t); } };
 const panelText = () => evalIn(() => document.querySelector('.roam-article .rv-panel')?.innerText ?? '');
 
@@ -394,8 +416,7 @@ async function main() {
   check('Rescan clicked 5 times finishes', await rescan('Rescan clicked 5 times, every file changed', LIMITS.rescan5Peak, 5));
 
   // crash guard: Roam dies in the middle of a scan
-  const mark = `roam-vaults:scanning:${BIG}`;
-  const hasMark = () => evalIn((k) => localStorage.getItem(k) !== null, mark);
+  const hasMark = () => scanMarked(BIG);
   // the 5 Rescans run as two scans one after the other: let the second one finish first
   await waitFor('every scan to finish', async () => {
     for (let i = 0; i < 8; i++) { if ((await statusOf(BIG)) !== `${NOTES} notes` || await hasMark()) return false; await sleep(250); }
@@ -419,7 +440,7 @@ async function main() {
   await killRoam('SIGKILL');
   log('Roam killed mid-scan; relaunching');
   await launchRoam();
-  log(`mark after relaunch, before the extension loads: ${await waitFor('the page', () => page.evaluate((k) => String(localStorage.getItem(k)), mark), 15000).catch(() => '?')}`);
+  log(`mark after relaunch, before the extension loads: ${await waitFor('the page', async () => String(await scanMarked(BIG)), 15000).catch(() => '?')}`);
   await signIn();
   await openGraph();
   await waitFor('the extension to load after relaunch', async () => { await openSettings(); return clickLeaf('Vaults (dev)'); }, 60000);
@@ -431,7 +452,7 @@ async function main() {
   await shot('after-crash-last-scan-didnt-finish');
   await clickButton('Rescan', BIG);
   const recovered = await waitFor('the row Rescan to finish', async () => (await statusOf(BIG)) === `${2 * NOTES} notes`, 150000).then(() => true, () => false);
-  check("The row's Rescan scans the vault and clears the mark", recovered && !(await evalIn((k) => localStorage.getItem(k) !== null, mark)), await statusOf(BIG));
+  check("The row's Rescan scans the vault and clears the mark", recovered && !(await scanMarked(BIG)), await statusOf(BIG));
   await shot('after-row-rescan');
 }
 

@@ -445,7 +445,7 @@ var isCollapsed = () => {
   }
 };
 var groupOpen = /* @__PURE__ */ new Map();
-var caret = (open3, extra = "") => h("span", { class: `bp3-icon-standard bp3-icon-caret-down rm-caret ${open3 ? "rm-caret-open" : "rm-caret-closed"} ${extra}` });
+var caret = (open4, extra = "") => h("span", { class: `bp3-icon-standard bp3-icon-caret-down rm-caret ${open4 ? "rm-caret-open" : "rm-caret-closed"} ${extra}` });
 function renderPanel(el, vaults2) {
   el.className = "rv-panel";
   if (!vaults2.length) {
@@ -472,11 +472,11 @@ function renderPanel(el, vaults2) {
     h("div", { class: "rv-sec-body" }, resultBody(ready, vaults2.length > 1))
   ));
 }
-function sectionHead(label, open3 = true, tools = []) {
+function sectionHead(label, open4 = true, tools = []) {
   const head = h(
     "div",
     { class: "rv-sec-head" },
-    caret(open3, "rv-head-caret"),
+    caret(open4, "rv-head-caret"),
     h("strong", {}, label),
     h("span", { class: "rv-spacer" }),
     ...tools
@@ -503,18 +503,18 @@ ${key}
 ${path}`;
     const box = h("div", { class: "rv-content" });
     const c = caret(false, "rm-caret-showing rv-group-caret");
-    const set = (open3) => {
-      c.classList.toggle("rm-caret-open", open3);
-      c.classList.toggle("rm-caret-closed", !open3);
-      box.hidden = !open3;
-      if (open3 && !box.childNodes.length) box.append(content());
+    const set = (open4) => {
+      c.classList.toggle("rm-caret-open", open4);
+      c.classList.toggle("rm-caret-closed", !open4);
+      box.hidden = !open4;
+      if (open4 && !box.childNodes.length) box.append(content());
     };
     c.addEventListener("click", () => {
-      const open3 = box.hidden;
+      const open4 = box.hidden;
       groupOpen.delete(k);
-      groupOpen.set(k, open3);
+      groupOpen.set(k, open4);
       if (groupOpen.size > 500) groupOpen.delete(groupOpen.keys().next().value);
-      set(open3);
+      set(open4);
     });
     set(groupOpen.get(k) ?? defOpen);
     return h(
@@ -578,12 +578,12 @@ async function loadPreview(el, path, act) {
     el.replaceChildren(`Couldn't read this note: ${e.message}`);
   }
 }
-function wireLinks(el, from, open3, resolve) {
+function wireLinks(el, from, open4, resolve) {
   el.querySelectorAll(".rv-wl[data-target]").forEach((a) => {
     a.addEventListener("click", async (e) => {
       e.stopPropagation();
       const to = await resolve(a.dataset.target, from);
-      if (to) open3(to);
+      if (to) open4(to);
       else a.classList.add("rv-missing");
     });
   });
@@ -697,6 +697,99 @@ async function ensurePermission(h2, ask) {
   return await hh.requestPermission({ mode: "read" }) === "granted";
 }
 
+// src/main/scan-mark.ts
+var DB3 = "roam-vaults-marks";
+var STORE3 = "scanning";
+var lsMark = (id) => `roam-vaults:scanning:${id}`;
+var lsClosed = (id) => `roam-vaults:closed:${id}`;
+function open3() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB3, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE3);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+var queue = Promise.resolve();
+function write(fn) {
+  const next = queue.then(async () => {
+    const db = await open3();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(STORE3, "readwrite", { durability: "strict" });
+      fn(tx.objectStore(STORE3));
+      tx.oncomplete = () => res();
+      tx.onerror = tx.onabort = () => rej(tx.error);
+    }).finally(() => db.close());
+  });
+  queue = next.catch(() => {
+  });
+  return next;
+}
+var ls = {
+  get: (k) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  set: (k, v) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {
+    }
+  },
+  del: (k) => {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+    }
+  }
+};
+function setScanMark(id, token) {
+  if (token) {
+    ls.del(lsClosed(id));
+    ls.set(lsMark(id), token);
+  } else ls.del(lsMark(id));
+  return write((s) => {
+    if (token) s.put(token, id);
+    else s.delete(id);
+  }).catch((e) => {
+    console.warn("[roam-vaults] could not save the scan mark", e);
+  });
+}
+function closeScanMark(id, token) {
+  ls.set(lsClosed(id), token);
+  void setScanMark(id, null);
+}
+async function unfinishedScans(ids) {
+  let saved = /* @__PURE__ */ new Map();
+  try {
+    const db = await open3();
+    saved = await new Promise((res, rej) => {
+      const out2 = /* @__PURE__ */ new Map();
+      const r = db.transaction(STORE3).objectStore(STORE3).openCursor();
+      r.onsuccess = () => {
+        const c = r.result;
+        if (!c) return res(out2);
+        out2.set(String(c.key), String(c.value));
+        c.continue();
+      };
+      r.onerror = () => rej(r.error);
+    }).finally(() => db.close());
+  } catch (e) {
+    console.warn("[roam-vaults] could not read the scan marks", e);
+  }
+  const out = /* @__PURE__ */ new Set();
+  for (const id of ids) {
+    const token = saved.get(id);
+    const closed = token !== void 0 && ls.get(lsClosed(id)) === token;
+    if (token !== void 0 && !closed || ls.get(lsMark(id)) !== null) out.add(id);
+    else if (closed) void setScanMark(id, null);
+  }
+  return out;
+}
+
 // src/main/settings.ts
 function renderSettings(el, m) {
   const vs = m.vaults();
@@ -755,21 +848,6 @@ function createSettingsPanel(extensionAPI, m) {
 }
 
 // src/main/index.ts
-var scanMark = (id) => `roam-vaults:scanning:${id}`;
-function hasScanMark(id) {
-  try {
-    return localStorage.getItem(scanMark(id)) !== null;
-  } catch {
-    return false;
-  }
-}
-function setScanMark(id, on) {
-  try {
-    if (on) localStorage.setItem(scanMark(id), "1");
-    else localStorage.removeItem(scanMark(id));
-  } catch {
-  }
-}
 var workerUrl = "";
 var MAX_RESULTS = 50;
 var Vault = class {
@@ -787,8 +865,8 @@ var Vault = class {
   opened = false;
   // has the worker been given the folder?
   stopped = false;
-  marked = false;
-  // is this vault's scan mark set?
+  token = null;
+  // this vault's scan mark, while set (see scan-mark.ts)
   constructor(id, handle) {
     this.id = id;
     this.handle = handle;
@@ -861,12 +939,17 @@ var Vault = class {
       this.set({ kind: "ready", result: null, live });
     }
   }
-  /** Set or clear the scan mark (see hasScanMark). */
+  /** Set or clear the scan mark (see scan-mark.ts). */
   mark(on) {
-    if (on !== this.marked) {
-      this.marked = on;
-      setScanMark(this.id, on);
-    }
+    if (on === (this.token !== null)) return;
+    this.token = on ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` : null;
+    void setScanMark(this.id, this.token);
+  }
+  /** Roam is closing or reloading mid-scan, which isn't a crash: the scan starts again next time. */
+  closing() {
+    if (this.state.kind !== "indexing" || this.token === null) return;
+    closeScanMark(this.id, this.token);
+    this.token = null;
   }
   async connect(ask) {
     let allowed = false;
@@ -1047,9 +1130,7 @@ async function onload({ extensionAPI }) {
     mo.disconnect();
     cancelAnimationFrame(frame);
   });
-  const onHide = () => vaults.forEach((v) => {
-    if (v.state.kind === "indexing") v.mark(false);
-  });
+  const onHide = () => vaults.forEach((v) => v.closing());
   window.addEventListener("pagehide", onHide);
   cleanups.push(() => window.removeEventListener("pagehide", onHide));
   const onHash = () => requestAnimationFrame(inject);
@@ -1057,8 +1138,10 @@ async function onload({ extensionAPI }) {
   cleanups.push(() => window.removeEventListener("hashchange", onHash));
   const saved = await loadVaults().catch(() => []);
   if (load !== loads) return;
+  const unfinished = await unfinishedScans(saved.map((x) => x.id));
+  if (load !== loads) return;
   vaults = saved.map((x) => new Vault(x.id, x.handle));
-  for (const v of vaults) if (hasScanMark(v.id)) v.set({ kind: "unfinished" });
+  for (const v of vaults) if (unfinished.has(v.id)) v.set({ kind: "unfinished" });
   changed();
   inject();
   await Promise.all(vaults.map((v) => v.state.kind === "unfinished" ? null : v.connect(false)));

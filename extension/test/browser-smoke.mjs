@@ -288,6 +288,48 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   ok('its Rescan scans it and clears the mark', await rowHas(q, '1 note') && await q.evaluate(() => localStorage.getItem('roam-vaults:scanning:My Vault') === null));
   await q.context().close();
 }
+{ // a crash can lose localStorage, so the mark is also kept in IndexedDB, written to disk at once
+  const putMark = (q, token) => q.evaluate((token) => new Promise((res, rej) => {
+    const r = indexedDB.open('roam-vaults-marks', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('scanning');
+    r.onsuccess = () => { const tx = r.result.transaction('scanning', 'readwrite'); tx.objectStore('scanning').put(token, 'My Vault'); tx.oncomplete = () => { r.result.close(); res(); }; tx.onerror = () => rej(tx.error); };
+  }), token);
+  const onloadSaved = (q) => q.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (key) { return key === 'vaults' ? { result: [{ id: 'My Vault', handle: vault }] } : get.call(this, key); };
+    window.__ext.onload({ extensionAPI: window.__api });
+  });
+  let q = await fresh();
+  await putMark(q, 't1');
+  await onloadSaved(q);
+  await mountSettings(q);
+  ok('a mark only in IndexedDB (localStorage lost in a crash) still stops the scan on load', await rowHas(q, "Last scan didn't finish"));
+  await q.context().close();
+  q = await fresh();
+  await putMark(q, 't2');
+  await q.evaluate(() => localStorage.setItem('roam-vaults:closed:My Vault', 't2'));
+  await onloadSaved(q);
+  await mountSettings(q);
+  ok('a mark whose scan was closed with Roam (not a crash) scans as usual', await rowHas(q, '1 note'));
+  await q.context().close();
+}
+{ // a scan writes its mark to IndexedDB with strict durability and deletes it when done
+  const q = await fresh();
+  await q.evaluate(() => {
+    window.__idb = [];
+    const tx = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = function (names, mode, opts) { if (String(names) === 'scanning' && mode === 'readwrite') window.__idb.push(opts?.durability); return tx.call(this, names, mode, opts); };
+    return window.__ext.onload({ extensionAPI: window.__api });
+  });
+  await mountSettings(q);
+  await press(q, 'Add vault folder');
+  await rowHas(q, '1 note');
+  await q.waitForTimeout(500);
+  const left = await q.evaluate(() => new Promise((res) => { const r = indexedDB.open('roam-vaults-marks', 1); r.onsuccess = () => { const g = r.result.transaction('scanning').objectStore('scanning').count(); g.onsuccess = () => { r.result.close(); res(g.result); }; }; }));
+  ok('the IndexedDB mark is written strictly while scanning and gone after', await q.evaluate(() => window.__idb.length >= 2 && window.__idb.every((d) => d === 'strict')) && left === 0);
+  await q.context().close();
+}
 { // the mark is set while a scan runs and cleared when it ends
   const q = await fresh();
   await q.evaluate(() => {

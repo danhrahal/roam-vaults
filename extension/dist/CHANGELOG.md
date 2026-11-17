@@ -22,6 +22,10 @@ Uses much less memory, most of all with large vaults.
 - Only one scan of a vault runs at a time. Clicking Rescan while one is running queues a single scan
   after it, instead of starting another alongside it with its own copy of the index.
 - Notes with the same title are listed in a fixed order, by path.
+- Clicking a line under External Vault References opens the note at the top, with that line still
+  highlighted, instead of scrolled to the middle of the note.
+- In the note viewer, the title and file path no longer get squeezed on long notes, where the scrolled
+  text ran underneath the path.
 
 ## 0.1.0 (2026-11-09)
 

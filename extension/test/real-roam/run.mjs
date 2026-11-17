@@ -175,12 +175,19 @@ async function signIn() {
       : document.querySelector('.roam-app, .rm-graph-list, .roam-body') || /HOSTED GRAPHS/i.test(document.body.innerText) ? 'in' : null), 90000);
   if (form === 'in') { log('already signed in'); return; }
   if (!EMAIL || !PASSWORD) throw new Error('ROAM_EMAIL and ROAM_PASSWORD are not set');
+  let step = 'email';
   try {
     await page.fill('input[name="email"], input[type="email"]', EMAIL);
+    step = 'password';
     await page.focus('input[name="password"], input[type="password"]');
     await page.keyboard.insertText(PASSWORD);
-    await page.click('button[type="submit"]:has-text("Sign In")');
-  } catch { throw new Error('could not fill in the sign-in form'); } // the error text could quote the input
+    step = 'Sign In button';
+    await page.locator('button', { hasText: /^Sign In$/ }).first().click();
+  } catch (e) {
+    // only the first line, with the credentials blanked: Playwright's call log can quote input
+    const why = e.message.split('\n')[0].split(EMAIL).join('***').split(PASSWORD).join('***');
+    throw new Error(`could not fill in the sign-in form (${step}): ${why}`);
+  }
   await waitFor('sign-in to finish', () => evalIn(() => !document.querySelector('input[type="password"]')), 60000)
     .catch(() => { throw new Error('sign-in failed: check the ROAM_EMAIL and ROAM_PASSWORD secrets'); });
   log('signed in');

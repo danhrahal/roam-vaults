@@ -22,6 +22,8 @@ Uses much less memory, most of all with large vaults.
 - Only one scan of a vault runs at a time. Clicking Rescan while one is running queues a single scan
   after it, instead of starting another alongside it with its own copy of the index.
 - Notes with the same title are listed in a fixed order, by path.
+- New **Open notes with** setting: open notes from the viewer in VS Code, Cursor, Zed or another editor
+  instead of Obsidian, using a link with `{vault}` and `{file}` in it. Empty keeps Open in Obsidian.
 
 ## 0.1.0 (2026-11-09)
 

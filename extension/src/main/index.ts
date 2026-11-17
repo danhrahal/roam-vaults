@@ -6,6 +6,7 @@ import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { createSettingsPanel, type SettingsVault } from './settings.ts';
 import { ATTR, installStyles, renderPanel, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult } from '../engine.ts';
+import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
 
 declare const WORKER_SOURCE: string; // injected by build.mjs
 declare global { interface Window { roamAlphaAPI: any } }
@@ -55,7 +56,8 @@ class Vault implements PanelVault {
     const viewer: ViewerActions = {
       read: (path) => this.call<string>('read', { path }),
       resolve: (target, from) => this.call<string | null>('resolve', { target, from }).catch(() => null),
-      openInObsidian: (path) => this.openInObsidian(path),
+      openOutside: (path) => this.openOutside(path),
+      openLabel: () => openLabel(openWith()),
     };
     this.act = {
       ...viewer,
@@ -131,9 +133,10 @@ class Vault implements PanelVault {
     if (!this.opened || this.stopped) return;
     await this.call('rescan').catch(() => {}); // the worker reports a failed scan as an error status
   }
-  openInObsidian(path: string) {
+  /** Open the note in Obsidian, or in the editor the "Open notes with" setting names. */
+  openOutside(path: string) {
     const a = document.createElement('a');
-    a.href = `obsidian://open?vault=${encodeURIComponent(this.name)}&file=${encodeURIComponent(path.replace(/\.md$/i, ''))}`;
+    a.href = openLink(openWith(), this.name, path);
     a.rel = 'noopener';
     a.click();
   }
@@ -141,6 +144,8 @@ class Vault implements PanelVault {
 }
 
 let vaults: Vault[] = [];
+let settingsAPI: { get?(id: string): unknown } | undefined;
+const openWith = () => { try { return settingsAPI?.get?.(OPEN_WITH_SETTING); } catch { return undefined; } };
 // Vault management lives in the extension's settings page; it re-renders on every change.
 const listeners = new Set<() => void>();
 function changed() { listeners.forEach((fn) => fn()); }
@@ -245,6 +250,7 @@ let loads = 0; // goes up on every load and unload, so a load still in progress 
 async function onload({ extensionAPI }: { extensionAPI: any }) {
   const load = ++loads;
   cleanups.push(installStyles());
+  settingsAPI = extensionAPI?.settings;
   workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
 
   // No command palette entries (so no hotkeys either): vaults are managed in the settings panel.

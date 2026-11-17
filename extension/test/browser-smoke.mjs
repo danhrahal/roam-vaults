@@ -69,7 +69,11 @@ await p.evaluate(async () => {
   // Minimal stand-in for the React that Roam provides, enough to mount the settings component.
   window.__effects = [];
   window.React = { createElement: (t, props) => ({ t, props }), useRef: () => (window.__settingsRef = { current: null }), useEffect: (fn) => window.__effects.push(fn) };
-  const settings = { panel: { create: (cfg) => { window.__settings = cfg; } } };
+  const settings = { panel: { create: (cfg) => { window.__settings = cfg; } }, get: (id) => (id === 'open-with' ? window.__openWith : undefined) };
+  // record where the viewer's open button sends a note instead of leaving the page
+  window.__opened = [];
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { if (/^(obsidian|vscode):/.test(this.href)) window.__opened.push(this.href); else click.call(this); };
   const ext = (await import('/extension.js')).default;
   console.log('imported');
   window.__ext = ext;
@@ -133,6 +137,20 @@ ok('unfolded note stays open after live update', await p.locator('.rv-preview').
 await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
 await p.waitForSelector('.rv-viewer .rv-hl');
 ok('viewer highlights line', (await p.locator('.rv-viewer .rv-hl').textContent()).includes('see'));
+// the open button: Obsidian by default, the "Open notes with" link when it's set
+ok('settings has an "Open notes with" text field', await p.evaluate(() => window.__settings.settings.some((x) => x.id === 'open-with' && x.name === 'Open notes with' && x.action.type === 'input')));
+const openBtn = () => p.locator('.rv-viewer-head button').first();
+ok('viewer button reads Open in Obsidian by default', (await openBtn().textContent()) === 'Open in Obsidian');
+await openBtn().click();
+ok('Open in Obsidian opens an obsidian:// link', (await p.evaluate(() => window.__opened.pop())) === 'obsidian://open?vault=My%20Vault&file=Zettel%2FHiring%20neural');
+await p.keyboard.press('Escape');
+await p.evaluate(() => { window.__openWith = 'vscode://file/Users/me/Notes/{vault}/{file}'; });
+await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
+await p.waitForSelector('.rv-viewer .rv-hl');
+ok('with "Open notes with" set, the button reads Open in editor', (await openBtn().textContent()) === 'Open in editor');
+await openBtn().click();
+ok('Open in editor opens the filled-in link', (await p.evaluate(() => window.__opened.pop())) === 'vscode://file/Users/me/Notes/My%20Vault/Zettel/Hiring%20neural.md');
+await p.evaluate(() => { window.__openWith = ''; });
 if (process.argv[2]) await p.screenshot({ path: process.argv[2].replace(/\.png$/, '-viewer.png') });
 // follow a wikilink inside the viewer
 await p.keyboard.press('Escape');

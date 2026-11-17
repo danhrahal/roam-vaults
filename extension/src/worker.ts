@@ -172,7 +172,7 @@ async function flush() {
   if (needRescan || !engine) {
     needRescan = false; pendingPaths = new Set();
     if (rewatch) { rewatch = false; await watch(); }
-    await build().catch(() => {}); // build() has already reported the failure
+    await scan().catch(() => {}); // build() has already reported the failure
     return;
   }
   const paths = [...pendingPaths]; pendingPaths = new Set();
@@ -212,14 +212,27 @@ async function build() {
   } finally { building--; }
 }
 
+// One scan at a time. Requests that come in while one runs share a single scan after it, so
+// clicking Rescan repeatedly doesn't hold several new indexes in memory at once.
+type Scan = ReturnType<typeof build>;
+let running: Scan | null = null;
+let queued: Scan | null = null;
+function scan(): Scan {
+  if (!running) {
+    const p = build().finally(() => { if (running === p) running = null; });
+    return running = p;
+  }
+  return queued ??= running.catch(() => {}).then(() => { queued = null; return scan(); });
+}
+
 const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
   async open({ handle, key }) {
     if (key !== vaultKey) { engine = null; unsaved = new Map(); }
     root = handle; vaultKey = key; dirs = new Map(); diskNames = new Map();
     await watch(); // before the scan, so a file edited while it runs is not missed
-    return build();
+    return scan();
   },
-  rescan: () => build(),
+  rescan: () => scan(),
   query: ({ title }) => engine ? engine.query(title) : null,
   read: ({ path }) => engine!.read(path),
   resolve: ({ target, from }) => engine?.resolve(target, from) ?? null,

@@ -9,6 +9,8 @@ export interface SettingsVault {
   /** e.g. "201 notes", "Indexing 50 of 201 notes", "Needs permission". */
   status: string;
   needsPermission: boolean;
+  /** The last scan never finished, most likely because Roam ran out of memory: scan only on request. */
+  unfinished: boolean;
   reconnect(): void;
   remove(): void;
 }
@@ -31,7 +33,8 @@ export function renderSettings(el: HTMLElement, m: SettingsModel) {
             h('div', { class: 'rv-settings-name' }, v.name, h('div', { class: 'rv-settings-status' }, v.status)),
             // one group, so in a narrow column the buttons move below the name together
             h('div', { class: 'rv-settings-btns' },
-              v.needsPermission ? btn('Reconnect', v.reconnect, 'bp3-intent-primary') : null,
+              v.needsPermission ? btn('Reconnect', v.reconnect, 'bp3-intent-primary')
+                : v.unfinished ? btn('Rescan', v.reconnect, 'bp3-intent-primary') : null,
               btn('Remove', v.remove, 'bp3-minimal')))))
         : null,
       h('div', { class: 'rv-settings-actions' }, btn('Add vault folder', m.add, 'bp3-intent-primary'),

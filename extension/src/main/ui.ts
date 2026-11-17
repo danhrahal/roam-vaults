@@ -106,6 +106,7 @@ export function removeToast() { toastEl?.remove(); clearTimeout(toastTimer); }
 // caret, then one group per note (caret + vault/path title), and the note's lines as bullets.
 export type SectionState =
   | { kind: 'permission' }
+  | { kind: 'unfinished' } // the last scan never finished: it waits for Rescan
   | { kind: 'indexing'; detail: string }
   | { kind: 'error'; detail: string }
   | { kind: 'ready'; result: PageResult | null; live: boolean };

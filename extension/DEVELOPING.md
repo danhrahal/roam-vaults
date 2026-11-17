@@ -47,6 +47,25 @@ Roam Depot tab.
 
 The design and measurements are in [docs/FEASIBILITY.md](../docs/FEASIBILITY.md).
 
+## Real Roam run (GitHub Actions)
+
+`.github/workflows/real-roam.yml` runs `test/real-roam/run.mjs` on pull requests that touch `extension/`
+and on demand (Actions > Real Roam > Run workflow). It installs Roam's Linux desktop app, starts it under
+Xvfb, signs in to the hosted test graph, loads `dist/` through Roam Depot's developer mode (from a local
+URL), and drives it over the DevTools protocol with Playwright. It checks the settings tab, a small vault
+on a real page (including a live edit), memory through a 20,000-note vault's first scan and Rescans, and
+that a scan which crashed Roam waits for Rescan. RESULTS.md and PNG screenshots are uploaded as the run's
+artifact; the memory limits are at the top of `run.mjs`.
+
+It needs the repository secrets `ROAM_EMAIL` and `ROAM_PASSWORD` (a Roam account that can open the test
+graph) and is skipped without them, including on pull requests from forks. The repository variable
+`ROAM_GRAPH` picks another graph. The script never logs, saves or photographs the credentials: no
+screenshot is taken until the graph is open, and Roam's own log and console stay out of the output.
+
+To run it by hand: install the Roam `.deb` and Xvfb, start `Xvfb :99`, then
+`DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… node test/real-roam/run.mjs` (`NOTES=2000` for a quicker run).
+A Roam profile that is already signed in skips the sign-in.
+
 ## Memory
 
 A vault's cost is paid in three places: the worker's JavaScript heap (the index), the rest of Roam's renderer

@@ -1,3 +1,5 @@
 node_modules/
 # written by build.sh for Roam Depot
 /extension.js
+# real Roam run output (test/real-roam/run.mjs)
+/real-roam-out/

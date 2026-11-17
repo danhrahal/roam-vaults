@@ -4,7 +4,7 @@
 
 See notes from your Obsidian-style vaults in your Roam graph.
 
-![External Vault References on a Roam page, listing notes from two vaults](https://raw.githubusercontent.com/sweenzor/roam-vaults/064219d198df126441412a0f77693b171ff139c8/docs/images/one-section.png)
+![External Vault References on a Roam page, listing notes from two vaults](https://raw.githubusercontent.com/sweenzor/roam-vaults/bda10bd5c9426d808395d9a15da8c28a107a2cd4/docs/images/one-section.png)
 
 </div>
 
@@ -49,12 +49,12 @@ kinds of notes, in this order:
 - **Notes tagged here.** These are notes tagged `#this-page`, shown with the tag. A Roam namespace `a/b`
   matches the nested tag `#a/b`.
 
-![The matching note, work-vault/Planning, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/064219d198df126441412a0f77693b171ff139c8/docs/images/unfolded-note.png)
+![The matching note, work-vault/Planning, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/bda10bd5c9426d808395d9a15da8c28a107a2cd4/docs/images/unfolded-note.png)
 
 Click a note title or line to read the whole note in Roam. Links between notes work inside the viewer.
 If you use Obsidian, click **Open in Obsidian** in the viewer to jump to the note there.
 
-![The note viewer, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/064219d198df126441412a0f77693b171ff139c8/docs/images/note-viewer.png)
+![The note viewer, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/bda10bd5c9426d808395d9a15da8c28a107a2cd4/docs/images/note-viewer.png)
 
 The section updates by itself. When you edit a note in Obsidian or any other editor, the change shows up in Roam within about a
 second.

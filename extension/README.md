@@ -52,7 +52,8 @@ kinds of notes, in this order:
 ![The matching note, work-vault/Planning, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/unfolded-note.png)
 
 Click a note title or line to read the whole note in Roam. Links between notes work inside the viewer.
-If you use Obsidian, click **Open in Obsidian** in the viewer to jump to the note there.
+If you use Obsidian, click **Open in Obsidian** in the viewer to jump to the note there. To use another
+editor, see [Opening notes in another editor](#opening-notes-in-another-editor).
 
 ![The note viewer, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/note-viewer.png)
 
@@ -133,6 +134,24 @@ same folder path, the same daily-note date, a `[[link]]` or a `#tag`. Similar ti
 yet. Only `.md` files are read. If you just changed the note and it doesn't show yet, click **Rescan**.
 
 </details>
+### Opening notes in another editor
+
+The viewer's button opens notes in Obsidian. To open them in another editor instead, fill in **Open notes
+with** in **Settings → Roam Depot → Vaults** with the link your editor uses to open a file. Put `{vault}`
+where the vault folder's name goes and `{file}` where the note's path inside the vault goes. The button then
+reads **Open in editor**. Leave the field empty to go back to Obsidian.
+
+Roam can't tell the extension where your vault folder is on disk, so type the folder that holds your vaults
+yourself. For vaults in `/Users/you/Notes`:
+
+| Editor | Open notes with |
+| --- | --- |
+| VS Code | `vscode://file/Users/you/Notes/{vault}/{file}` |
+| Cursor | `cursor://file/Users/you/Notes/{vault}/{file}` |
+| Zed | `zed://file/Users/you/Notes/{vault}/{file}` |
+| BBEdit | `x-bbedit://open?url=file:///Users/you/Notes/{vault}/{file}` |
+
+The setting applies to every vault, so this works when your vaults sit in the same folder.
 
 ## Privacy
 

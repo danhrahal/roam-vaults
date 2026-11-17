@@ -2,6 +2,7 @@
 // its status and a Remove button, and an "Add vault folder" button. Folders can't be typed in
 // as paths: Roam can only read a folder the user picks in the system folder dialog.
 import { h } from './ui.ts';
+import { OPEN_WITH_SETTING } from './open-with.ts';
 
 export interface SettingsVault {
   id: string;
@@ -47,6 +48,13 @@ export function createSettingsPanel(extensionAPI: any, m: SettingsModel) {
   if (!extensionAPI?.settings?.panel?.create) return;
   const React = (window as any).React;
   const description = 'Obsidian-style vaults (folders of Markdown notes) shown as "External Vault References".';
+  // Roam's own text setting: Roam saves it, and the viewer reads it each time it opens a note.
+  const openWith = {
+    id: OPEN_WITH_SETTING,
+    name: 'Open notes with',
+    description: 'Empty opens notes in Obsidian. For another editor, enter its link with {vault} and {file}, such as vscode://file/Users/you/Notes/{vault}/{file}',
+    action: { type: 'input', placeholder: '' },
+  };
   if (React?.createElement && React.useRef && React.useEffect) {
     const VaultList = () => {
       const ref = React.useRef(null);
@@ -61,12 +69,12 @@ export function createSettingsPanel(extensionAPI: any, m: SettingsModel) {
     };
     extensionAPI.settings.panel.create({
       tabTitle: 'Vaults',
-      settings: [{ id: 'vaults', name: 'Vaults', description, action: { type: 'reactComponent', component: VaultList } }],
+      settings: [{ id: 'vaults', name: 'Vaults', description, action: { type: 'reactComponent', component: VaultList } }, openWith],
     });
   } else {
     extensionAPI.settings.panel.create({
       tabTitle: 'Vaults',
-      settings: [{ id: 'add-vault', name: 'Add vault folder', description, action: { type: 'button', onClick: m.add, content: 'Add vault folder' } }],
+      settings: [{ id: 'add-vault', name: 'Add vault folder', description, action: { type: 'button', onClick: m.add, content: 'Add vault folder' } }, openWith],
     });
   }
 }

@@ -34,6 +34,8 @@ Uses much less memory, most of all with large vaults.
   listed in Obsidian's Excluded files (Settings → Files and links), are no longer indexed. Ignored folders
   aren't read at all, and changes inside them no longer set off a rescan. Editing a `.gitignore` or the
   Excluded files list rescans the vault.
+- New **Open notes with** setting: open notes from the viewer in VS Code, Cursor, Zed or another editor
+  instead of Obsidian, using a link with `{vault}` and `{file}` in it. Empty keeps Open in Obsidian.
 
 ## 0.1.0 (2026-11-09)
 

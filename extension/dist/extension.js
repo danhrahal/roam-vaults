@@ -629,7 +629,6 @@ async function openViewer(path, line, act) {
     const text = await act.read(path);
     body.replaceChildren(renderMarkdown(text, line));
     wireLinks(body, path, (to) => openViewer(to, void 0, act), act.resolve);
-    body.querySelector(".rv-hl")?.scrollIntoView({ block: "center" });
   } catch (e) {
     body.replaceChildren(`Couldn't read this note: ${e.message}`);
   }

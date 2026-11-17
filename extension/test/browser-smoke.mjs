@@ -129,10 +129,14 @@ const live = await p.waitForFunction(() => document.querySelector('.rv-panel')?.
 ok('live update via FileSystemObserver', live);
 ok('unfolded note stays open after live update', await p.locator('.rv-preview').evaluate((e) => !e.hidden && e.textContent.includes('Kickoff with')));
 
-// viewer opens at the linked line
+// viewer opens at the top of the note, with the linked line highlighted
+// (the body is squeezed so the note scrolls and the highlighted line starts out of view)
+await p.addStyleTag({ content: '.rv-viewer>.rv-viewer-body{max-height:20px}' });
 await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
 await p.waitForSelector('.rv-viewer .rv-hl');
 ok('viewer highlights line', (await p.locator('.rv-viewer .rv-hl').textContent()).includes('see'));
+ok('viewer opens at the top of the note', await p.locator('.rv-viewer > .rv-viewer-body').evaluate((e) => e.scrollHeight > e.clientHeight && e.scrollTop === 0));
+await p.evaluate(() => document.querySelector('style:last-of-type')?.remove());
 if (process.argv[2]) await p.screenshot({ path: process.argv[2].replace(/\.png$/, '-viewer.png') });
 // follow a wikilink inside the viewer
 await p.keyboard.press('Escape');

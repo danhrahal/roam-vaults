@@ -271,7 +271,6 @@ export async function openViewer(path: string, line: number | undefined, act: Vi
     const text = await act.read(path);
     body.replaceChildren(renderMarkdown(text, line));
     wireLinks(body, path, (to) => openViewer(to, undefined, act), act.resolve);
-    body.querySelector('.rv-hl')?.scrollIntoView({ block: 'center' });
   } catch (e) {
     body.replaceChildren(`Couldn't read this note: ${(e as Error).message}`);
   }

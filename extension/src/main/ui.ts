@@ -40,10 +40,10 @@ const STYLES = `
 .rv-toast.rv-error{background:#a82a2a}
 .rv-overlay{position:fixed;inset:0;z-index:20000;background:rgba(16,22,26,.45);display:flex;align-items:center;justify-content:center}
 .rv-viewer{background:#fff;color:#182026;width:min(760px,92vw);max-height:86vh;display:flex;flex-direction:column;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.3)}
-.rv-viewer-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #e5e5ea}
+.rv-viewer-head{flex:none;display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #e5e5ea}
 .rv-viewer-head h3{margin:0;font-size:18px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rv-viewer-path{padding:4px 16px 0;color:#8a8a99;font-size:12px}
-.rv-viewer-body{padding:8px 20px 20px;overflow:auto;font-size:14px;line-height:1.55}
+.rv-viewer-path{flex:none;padding:4px 16px 0;color:#8a8a99;font-size:12px}
+.rv-viewer-body{min-height:0;padding:8px 20px 20px;overflow:auto;font-size:14px;line-height:1.55}
 .rv-viewer-body h1,.rv-viewer-body h2,.rv-viewer-body h3,.rv-viewer-body h4{margin:14px 0 6px}
 .rv-viewer-body p{margin:4px 0}
 .rv-viewer-body pre{background:#f5f8fa;padding:8px;border-radius:4px;overflow:auto;font-size:12px}

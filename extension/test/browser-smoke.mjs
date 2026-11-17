@@ -130,12 +130,14 @@ ok('live update via FileSystemObserver', live);
 ok('unfolded note stays open after live update', await p.locator('.rv-preview').evaluate((e) => !e.hidden && e.textContent.includes('Kickoff with')));
 
 // viewer opens at the top of the note, with the linked line highlighted
-// (the body is squeezed so the note scrolls and the highlighted line starts out of view)
-await p.addStyleTag({ content: '.rv-viewer>.rv-viewer-body{max-height:20px}' });
+// (the viewer is squeezed so the note scrolls and the highlighted line starts out of view; Roam's
+// own styles let the title and path rows shrink, which min-height:0 stands in for here)
+await p.addStyleTag({ content: '.rv-viewer{max-height:130px}.rv-viewer>*{min-height:0}' });
 await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
 await p.waitForSelector('.rv-viewer .rv-hl');
 ok('viewer highlights line', (await p.locator('.rv-viewer .rv-hl').textContent()).includes('see'));
 ok('viewer opens at the top of the note', await p.locator('.rv-viewer > .rv-viewer-body').evaluate((e) => e.scrollHeight > e.clientHeight && e.scrollTop === 0));
+ok('viewer keeps the title and path clear of the scrolling note', await p.locator('.rv-viewer').evaluate((v) => [...v.children].slice(0, 2).every((e) => e.scrollHeight <= e.clientHeight + 1)));
 await p.evaluate(() => document.querySelector('style:last-of-type')?.remove());
 if (process.argv[2]) await p.screenshot({ path: process.argv[2].replace(/\.png$/, '-viewer.png') });
 // follow a wikilink inside the viewer

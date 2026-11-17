@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 (unreleased)
+## 0.1.1 (2026-11-17)
 
 Uses much less memory, most of all with large vaults.
 

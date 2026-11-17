@@ -394,15 +394,29 @@ async function main() {
   check('Rescan clicked 5 times finishes', await rescan('Rescan clicked 5 times, every file changed', LIMITS.rescan5Peak, 5));
 
   // crash guard: Roam dies in the middle of a scan
+  const mark = `roam-vaults:scanning:${BIG}`;
+  const hasMark = () => evalIn((k) => localStorage.getItem(k) !== null, mark);
+  // the 5 Rescans run as two scans one after the other: let the second one finish first
+  await waitFor('every scan to finish', async () => {
+    for (let i = 0; i < 8; i++) { if ((await statusOf(BIG)) !== `${NOTES} notes` || await hasMark()) return false; await sleep(250); }
+    return true;
+  }, 90000).catch(() => {});
+  log(`before reload: ${BIG} "${await statusOf(BIG)}", mark ${await hasMark()}`);
   touchAll(big);
   await dismissDialogs();
   await page.reload();
-  const mark = `roam-vaults:scanning:${BIG}`;
-  const marked = await waitFor('the scan mark during the startup scan', () => evalIn((k) => localStorage.getItem(k) !== null, mark), 90000, 50).then(() => true, () => false);
+  const marked = await waitFor('the scan mark during the startup scan', hasMark, 90000, 50).then(() => true, () => false);
   check('Startup scan marks the vault while it runs', marked);
+  // A real crash (out of memory) comes well into a scan. Killing within milliseconds of the mark
+  // can beat Chromium's write of localStorage to disk, which is not what the guard is for.
+  await sleep(3000);
+  const stillScanning = await hasMark();
+  log(`mark still set 3 s into the scan: ${stillScanning}`);
+  check('Scan still running when Roam is killed', stillScanning);
   await killRoam('SIGKILL');
   log('Roam killed mid-scan; relaunching');
   await launchRoam();
+  log(`mark after relaunch, before the extension loads: ${await waitFor('the page', () => page.evaluate((k) => String(localStorage.getItem(k)), mark), 15000).catch(() => '?')}`);
   await signIn();
   await openGraph();
   await waitFor('the extension to load after relaunch', async () => { await openSettings(); return clickLeaf('Vaults (dev)'); }, 60000);

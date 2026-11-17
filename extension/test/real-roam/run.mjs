@@ -354,7 +354,7 @@ async function main() {
   await openTestPage();
   const t1 = await waitFor('External Vault References on the page', async () => { const t = await panelText(); return t.includes('External Vault References') && t; }, 15000).catch(() => '');
   check('External Vault References shows on a real Roam page', t1.includes('3 External Vault References'), t1.split('\n')[0]);
-  check('Counterpart note listed first', (await evalIn(() => document.querySelector('.roam-article .rv-panel .rv-note')?.textContent.trim())) === TEST_PAGE);
+  check('Counterpart note listed first', (await evalIn(() => document.querySelector('.roam-article .rv-panel .rv-note')?.textContent.trim()))?.endsWith(TEST_PAGE)); // "CI Vault/…" once there are two vaults
   check('Backlink line shown', t1.includes('Mentions') && t1.includes('backlink line'));
   check('Panel sits below Linked References', await evalIn(() => {
     const refs = document.querySelector('.roam-article .rm-reference-main'), panel = document.querySelector('.roam-article .rv-panel');
@@ -402,16 +402,19 @@ async function main() {
     return true;
   }, 90000).catch(() => {});
   log(`before reload: ${BIG} "${await statusOf(BIG)}", mark ${await hasMark()}`);
+  // Chromium writes localStorage to disk up to about 5 s after a change, so a mark set less than
+  // that before a crash is lost. Double the vault so the startup scan runs well past that.
+  const extra = genVault(NOTES, path.join(big, 'Extra'));
+  log(`added ${extra.files} more files so the scan runs longer`);
   touchAll(big);
   await dismissDialogs();
   await page.reload();
   const marked = await waitFor('the scan mark during the startup scan', hasMark, 90000, 50).then(() => true, () => false);
   check('Startup scan marks the vault while it runs', marked);
-  // A real crash (out of memory) comes well into a scan. Killing within milliseconds of the mark
-  // can beat Chromium's write of localStorage to disk, which is not what the guard is for.
-  await sleep(3000);
+  // A real crash (out of memory) comes well into a scan, after the mark has reached the disk.
+  await sleep(8000);
   const stillScanning = await hasMark();
-  log(`mark still set 3 s into the scan: ${stillScanning}`);
+  log(`mark still set 8 s into the scan: ${stillScanning}`);
   check('Scan still running when Roam is killed', stillScanning);
   await killRoam('SIGKILL');
   log('Roam killed mid-scan; relaunching');
@@ -427,7 +430,7 @@ async function main() {
   check('The other vault scans normally after the crash', rows?.[SMALL]?.status === '4 notes', rows?.[SMALL]?.status);
   await shot('after-crash-last-scan-didnt-finish');
   await clickButton('Rescan', BIG);
-  const recovered = await waitFor('the row Rescan to finish', async () => (await statusOf(BIG)) === `${NOTES} notes`, 120000).then(() => true, () => false);
+  const recovered = await waitFor('the row Rescan to finish', async () => (await statusOf(BIG)) === `${2 * NOTES} notes`, 150000).then(() => true, () => false);
   check("The row's Rescan scans the vault and clears the mark", recovered && !(await evalIn((k) => localStorage.getItem(k) !== null, mark)), await statusOf(BIG));
   await shot('after-row-rescan');
 }

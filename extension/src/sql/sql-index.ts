@@ -9,7 +9,7 @@ import type { Note } from '../core/types.ts';
 const MD = /\.md$/i;
 const titleOf = (path: string) => baseOf(path).replace(MD, '');
 const ALIAS = 0, TAG = 1, MATCHER = 2;
-const WRITES_PER_COMMIT = 2000;
+const WRITES_PER_COMMIT = 20000;
 
 export class SqlIndex extends VaultIndex {
   override readonly inPlace = true;
@@ -78,9 +78,9 @@ export class SqlIndex extends VaultIndex {
   }
   override eachLinker(name: string, fn: (src: string, target: string, where: number) => void) {
     for (const [src, json] of this.rows(
-      'SELECT f.path, n.links FROM link_names l JOIN notes n ON n.id = l.note JOIN files f ON f.id = l.note WHERE l.name = ? ORDER BY l.note', [name])) {
+      'SELECT f.path, l.links FROM link_names l JOIN files f ON f.id = l.note WHERE l.name = ? ORDER BY l.note', [name])) {
       const links = JSON.parse(json);
-      for (let i = 0; i < links.length; i += 2) if (this.linkName(links[i], src) === name) fn(src, links[i], links[i + 1]);
+      for (let i = 0; i < links.length; i += 2) fn(src, links[i], links[i + 1]);
     }
   }
   private linkName(target: string, src: string) { return baseOf(this.keyOf(target, src)); }
@@ -94,6 +94,19 @@ export class SqlIndex extends VaultIndex {
     const names = new Set<string>();
     for (let i = 0; i < links.length; i += 2) names.add(this.linkName(links[i] as string, src));
     return JSON.stringify([...names]);
+  }
+  /** A note's rows for link_names: [name key, its links as flat pairs], as JSON. */
+  private linksByName(links: (string | number)[], src: string): string {
+    const by = new Map<string, (string | number)[]>();
+    for (let i = 0; i < links.length; i += 2) {
+      const name = this.linkName(links[i] as string, src);
+      const at = by.get(name);
+      if (at) at.push(links[i], links[i + 1]); else by.set(name, [links[i], links[i + 1]]);
+    }
+    return JSON.stringify([...by]);
+  }
+  private addLinkNames(id: number, links: (string | number)[], src: string) {
+    if (links.length) this.run('INSERT INTO link_names(name, note, links) SELECT value ->> 0, ?, value -> 1 FROM json_each(?)', [id, this.linksByName(links, src)]);
   }
   private keyed(kind: number, key: string): readonly string[] {
     const out = this.col('SELECT f.path FROM note_keys k JOIN files f ON f.id = k.note WHERE k.kind = ? AND k.key = ? ORDER BY k.note', [kind, key]);
@@ -169,7 +182,7 @@ export class SqlIndex extends VaultIndex {
     // Lists go over as JSON and are spread into rows by SQLite (json_each): a few calls per note.
     this.run('INSERT OR REPLACE INTO notes(id, size, mtime, aliases, tags, links) VALUES (?, ?, ?, ?, ?, ?)',
       [id, note.size, note.mtime, JSON.stringify(note.aliases), JSON.stringify(note.tags), JSON.stringify(note.links)]);
-    if (note.links.length) this.run('INSERT OR IGNORE INTO link_names(name, note) SELECT value, ? FROM json_each(?)', [id, this.linkNames(note.links, note.path)]);
+    this.addLinkNames(id!, note.links, note.path);
     const keys = [...aliasKeys(note).map((k) => [ALIAS, k]), ...noteTagKeys(note).map((k) => [TAG, k])];
     if (keys.length) this.run('INSERT OR IGNORE INTO note_keys(kind, key, note) SELECT value ->> 0, value ->> 1, ? FROM json_each(?)', [id, JSON.stringify(keys)]);
     if (text !== undefined) {
@@ -191,7 +204,7 @@ export class SqlIndex extends VaultIndex {
     // A link's name key can depend on the note's folder (./ and ../ links). The text index row
     // stays as it is: same id, same title, same text.
     this.dropLinkNames(id, from);
-    if (note.links.length) this.run('INSERT OR IGNORE INTO link_names(name, note) SELECT value, ? FROM json_each(?)', [id, this.linkNames(note.links, to)]);
+    this.addLinkNames(id, note.links, to);
     for (const fn of this.listeners) fn(to, 'add');
     return true;
   }

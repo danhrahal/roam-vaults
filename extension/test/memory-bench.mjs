@@ -305,8 +305,8 @@ const timing = await p.evaluate(async (titles) => {
   if (ext.search) {
     const qs = ['alpha', 'meeting notes', 'budget review plan', 'neur', 'roadmap quarterly', 'zzzz', 'Research market customer product'];
     out.search = await time((i) => ext.search(qs[i % qs.length]), 70);
-    out.hits = {};
-    for (const q of qs) out.hits[q] = (await ext.search(q, 100000)).length;
+    out.hits = {}; // up to 50: every hit's line is read from its note
+    for (const q of qs) out.hits[q] = (await ext.search(q, 50)).length;
     out.sample = (await ext.search('budget review', 3)).map((h) => `${h.path}:${h.line} ${h.text.slice(0, 60)}`);
   }
   return out;

@@ -266,6 +266,9 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
   cleanups.push(installStyles());
   settingsAPI = extensionAPI?.settings;
   workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
+  // Ask the browser not to clear the vault databases under storage pressure. If it does anyway, a
+  // database comes back empty and the next scan reads the vault again.
+  navigator.storage?.persist?.().catch(() => {});
 
   // No command palette entries (so no hotkeys either): vaults are managed in the settings panel.
   createSettingsPanel(extensionAPI, {

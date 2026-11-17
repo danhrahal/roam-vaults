@@ -72,9 +72,17 @@ export class SqlIndex extends VaultIndex {
   // ---------- lookups ----------
   override hasFile(path: string) { return this.idOf(path) !== undefined; }
   override nameOf(path: string): string | undefined { return this.one('SELECT name FROM files WHERE path = ?', [path])?.[0]; }
+  /** Paths by name key, as recently looked up: resolving a page's links asks for the same names
+   *  over and over. Cleared whenever a file comes, goes or moves; bounded. */
+  private named = new Map<string, readonly string[]>();
   override pathsNamed(nameKey: string): readonly string[] {
-    const out = this.col('SELECT path FROM files WHERE name = ? ORDER BY id', [nameKey]);
-    return out.length ? out : NONE;
+    let out = this.named.get(nameKey);
+    if (out) return out;
+    const found = this.col('SELECT path FROM files WHERE name = ? ORDER BY id', [nameKey]);
+    out = found.length ? found : NONE;
+    if (this.named.size >= 4096) this.named.clear();
+    this.named.set(nameKey, out);
+    return out;
   }
   override eachLinker(name: string, fn: (src: string, target: string, where: number) => void) {
     for (const [src, json] of this.rows(
@@ -168,6 +176,7 @@ export class SqlIndex extends VaultIndex {
   // ---------- changes ----------
   private addFile(path: string): number {
     this.write();
+    this.named.clear();
     return this.one('INSERT INTO files(path, name) VALUES (?, ?) RETURNING id', [path, baseOf(fileKeyPath(path))])![0];
   }
   override upsertNote(note: Note, text?: string) {
@@ -201,6 +210,7 @@ export class SqlIndex extends VaultIndex {
     for (const fn of this.listeners) fn(from, 'remove');
     this.write();
     this.run('UPDATE files SET path = ?, name = ? WHERE id = ?', [to, baseOf(fileKeyPath(to)), id]);
+    this.named.clear();
     // A link's name key can depend on the note's folder (./ and ../ links). The text index row
     // stays as it is: same id, same title, same text.
     this.dropLinkNames(id, from);
@@ -226,6 +236,7 @@ export class SqlIndex extends VaultIndex {
       this.run('DELETE FROM note_fts WHERE rowid = ?', [id]);
     }
     this.run('DELETE FROM files WHERE id = ?', [id]);
+    this.named.clear();
   }
   override build(notes: Note[], attachments: string[]) {
     for (const p of attachments) this.addAttachment(p);

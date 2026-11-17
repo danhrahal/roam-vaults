@@ -343,6 +343,70 @@ const scanMarked = (id) => evalIn(async (id) => {
 const touchAll = (dir) => { const t = new Date(); for (const f of fs.readdirSync(dir, { recursive: true })) { const p = path.join(dir, f); if (fs.statSync(p).isFile()) fs.utimesSync(p, t, t); } };
 const panelText = () => evalIn(() => document.querySelector('.roam-article .rv-panel')?.innerText ?? '');
 
+// ---------- search: what Roam's own search dropdown looks like, and a mock-up of vault hits in it ----------
+// Not a check: a picture to decide where search results would go. The vault rows are cloned from
+// Roam's own result rows, with text from the small vault, so they take Roam's styling.
+async function searchMockup() {
+  await openTestPage();
+  await dismissDialogs();
+  const opened = await evalIn(() => {
+    const el = document.querySelector('.rm-find-or-create-wrapper, #find-or-create-input, .rm-topbar .bp3-input, .rm-topbar [placeholder*="Search" i]');
+    if (!el) return false;
+    (el.querySelector?.('input') ?? el).click?.();
+    return true;
+  });
+  if (!opened) await page.keyboard.press('Control+u');
+  await sleep(800);
+  await page.keyboard.insertText('CI');
+  await sleep(2000);
+  const dom = await evalIn(() => {
+    const a = document.activeElement;
+    const pops = [...document.querySelectorAll('.bp3-portal, .bp3-popover, [class*="search" i], [class*="find-or-create" i]')]
+      .filter((x) => x.getBoundingClientRect().height > 40);
+    const desc = (x) => `${x.tagName.toLowerCase()}${x.id ? '#' + x.id : ''}.${[...x.classList].join('.')}`;
+    return {
+      active: a ? desc(a) + ' placeholder=' + a.getAttribute('placeholder') : null,
+      containers: pops.map(desc),
+      html: pops.map((x) => x.outerHTML.slice(0, 30000)).join('\n\n<!-- ---- -->\n\n'),
+    };
+  });
+  fs.writeFileSync(path.join(OUT, 'search-dropdown-dom.html'), `<!-- active: ${dom.active}\n containers: ${dom.containers.join(' | ')} -->\n${dom.html}`);
+  await shot('search-dropdown-roam');
+  const mocked = await evalIn(() => {
+    // The result rows: the largest group of siblings with the same classes inside the dropdown.
+    let best = null;
+    for (const box of document.querySelectorAll('.bp3-portal, .bp3-popover, [class*="search" i]')) {
+      for (const el of box.querySelectorAll('*')) {
+        const kids = [...el.children];
+        if (kids.length < 2) continue;
+        const cls = kids[0].className;
+        if (!cls || kids.filter((k) => k.className === cls).length < 2) continue;
+        if (!best || kids.length > best.children.length) best = el;
+      }
+    }
+    if (!best) return false;
+    const rows = [...best.children];
+    const row = rows[rows.length - 1];
+    const make = (title, line) => {
+      const r = row.cloneNode(true);
+      r.setAttribute('data-rv-mock', '');
+      const leaves = [...r.querySelectorAll('*')].filter((x) => !x.children.length && x.textContent.trim());
+      if (leaves.length) { leaves[0].textContent = title; for (const l of leaves.slice(1)) l.textContent = ''; if (leaves[1]) leaves[1].textContent = line; else leaves[0].insertAdjacentText('afterend', ' ' + line); }
+      else r.textContent = title + ' ' + line;
+      r.classList.remove('bp3-active', 'active', 'selected');
+      return r;
+    };
+    best.append(
+      make('Vaults CI test', 'The note for this page. See [[CI linked note]].'),
+      make('CI linked note', 'Mentions [[Vaults CI test]] in a backlink line.'),
+    );
+    return true;
+  });
+  log('search mock-up rows added:', mocked);
+  await shot('search-mockup');
+  await page.keyboard.press('Escape');
+}
+
 // ---------- the run ----------
 async function main() {
   if (!fs.existsSync(path.join(DIST, 'extension.js'))) throw new Error(`no build in ${DIST}: run npm run build first`);
@@ -396,6 +460,14 @@ async function main() {
   fs.writeFileSync(path.join(small, 'Fresh CI note.md'), `Written while Roam was open, links [[${TEST_PAGE}]].\n`);
   const live = await waitFor('the new note to appear', async () => (await panelText()).includes('Fresh CI note'), 15000).then(() => true, () => false);
   check('A note added on disk shows up without a Rescan', live);
+  check('The vault index is stored in SQLite in the private file system', await evalIn(async () => {
+    try {
+      const d = await (await navigator.storage.getDirectory()).getDirectoryHandle('.roam-vaults');
+      for await (const [, h] of d.entries()) if (h.kind === 'directory') return true;
+    } catch { /* none */ }
+    return false;
+  }));
+  await searchMockup().catch((e) => log('search mockup skipped:', e.message));
 
   // large vault: memory
   await addVault(big);

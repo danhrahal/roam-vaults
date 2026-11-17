@@ -1,7 +1,7 @@
 // Indexer Web Worker. Loaded from a Blob URL of this bundled file. Owns the vault
 // directory handle, the index, the IndexedDB parse cache and the file watcher.
 import { VaultEngine, inFolder, type VaultFS, type FileMeta, type Cache } from './engine.ts';
-import { readNotes, writeNotes } from './cache-db.ts';
+import { readNotes, writeNotes, deleteNotes } from './cache-db.ts';
 import { intern } from './core/parser.ts';
 import { NONE } from './core/vault-index.ts';
 import { VaultIgnore, GITIGNORE } from './core/ignore.ts';
@@ -322,6 +322,8 @@ const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
         const o = await openDb(key, wasm);
         store = new SqlIndex(o.db);
         if (!o.persistent) console.warn('[roam-vaults] index kept in memory:', o.why);
+        // The database is the cache now: what the in-memory index kept in IndexedDB goes.
+        else deleteNotes(key).catch(() => { /* the cache is only an optimisation */ });
       } catch (e) { console.warn('[roam-vaults] SQLite unavailable, using the in-memory index', e); }
     }
     root = handle; vaultKey = key; dirs = new Map(); diskNames = new Map(); rules = new VaultIgnore();

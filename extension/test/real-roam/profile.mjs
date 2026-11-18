@@ -315,15 +315,24 @@ async function main() {
 /** Creates the pages the graph doesn't have yet. */
 async function ensurePages(titles) {
   if (!roam.page) { serve(BUILDS[0].dist); await launchRoam(); await signIn(EMAIL, PASSWORD); await openGraph(GRAPH); }
-  const made = await evalIn(async (titles) => {
-    const api = window.roamAlphaAPI, made = [];
-    for (const title of titles) {
-      if (api.data.q('[:find ?u . :in $ ?t :where [?p :node/title ?t] [?p :block/uid ?u]]', title)) continue;
-      await api.data.page.create({ page: { title } }); made.push(title);
+  const missing = () => evalIn((titles) => titles.filter((t) =>
+    !window.roamAlphaAPI.data.q('[:find ?u . :in $ ?t :where [?p :node/title ?t] [?p :block/uid ?u]]', t)), titles);
+  // Roam saves a new page to the server a little later: quitting Roam straight after creating a
+  // batch loses most of them. So create them slowly, wait, and check again after a reload.
+  for (let round = 0; round < 3; round++) {
+    const todo = await missing();
+    if (!todo.length) return;
+    log(`creating ${todo.length} pages: ${todo.join(', ')}`);
+    for (const title of todo) {
+      await evalIn((title) => window.roamAlphaAPI.data.page.create({ page: { title } }), title);
+      await sleep(1500);
     }
-    return made;
-  }, titles);
-  if (made.length) log(`created ${made.length} pages: ${made.join(', ')}`);
+    await sleep(15000);
+    await roam.page.reload();
+    await openGraph(GRAPH);
+  }
+  const left = await missing();
+  if (left.length) throw new Error(`could not create the pages ${left.join(', ')}`);
 }
 /** 2020-01-02 as Roam titles its daily page: January 2nd, 2020. */
 function roamDate(iso) {

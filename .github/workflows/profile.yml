@@ -63,7 +63,7 @@ jobs:
             echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           case "$EVENT" in
-            pull_request) sizes=10000; refs="$BASE_REF=$BASE_SHA,this PR=$HEAD_SHA" ;;
+            pull_request) sizes=100000,1000000; refs="this PR=$HEAD_SHA" ;; # TEMPORARY: large-size trial, revert before merge
             *) sizes="$INPUT_SIZES"; refs="$INPUT_REFS" ;;
           esac
           json=$(printf '%s' "$sizes" | jq -Rc '[split(",")[] | gsub("[ _,]"; "") | select(length > 0) | tonumber]') \

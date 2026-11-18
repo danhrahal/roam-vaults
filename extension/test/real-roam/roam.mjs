@@ -91,11 +91,16 @@ export async function launchRoam() {
   await roam.page.setViewportSize?.({ width: 1200, height: 773 }).catch(() => {});
 }
 /** Stops Roam with `signal`, then kills what is still running after `grace` ms. Returns true if
- *  anything had to be killed. */
+ *  anything had to be killed. SIGKILL goes to every Roam process, as a crash would. Any other signal
+ *  goes to the main process only, which then quits the way closing the window does: signalling the
+ *  helpers as well would stop the storage process before it writes out localStorage, which Chromium
+ *  saves lazily, so the next start would see stale values. */
 export async function killRoam(signal = 'SIGKILL', grace = 15000) {
   try { await roam.browser?.close(); } catch { /* already gone */ }
   roam.browser = null; roam.page = null;
-  for (const pid of roamPids()) { try { process.kill(+pid, signal); } catch { /* gone */ } }
+  const pids = roamPids();
+  const main = pids.filter((pid) => { try { return !fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('--type='); } catch { return false; } });
+  for (const pid of signal === 'SIGKILL' || !main.length ? pids : main) { try { process.kill(+pid, signal); } catch { /* gone */ } }
   for (let t = 0; t < grace && roamPids().length; t += 500) await sleep(500);
   const left = roamPids();
   for (const pid of left) { try { process.kill(+pid, 'SIGKILL'); } catch { /* gone */ } }

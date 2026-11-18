@@ -286,12 +286,19 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   await waitFor('the Rescan to be saved', async () => !(await scanMarked(VAULT)), scanTimeout, 500);
   m.rescanSaveS = (Date.now() - tm) / 1000;
   log(`rescan saved ${m.rescanSaveS.toFixed(1)} s after its status`);
-  await sleep(10000); // let the cache settle before quitting
+  // let the cache settle before quitting, and note anything that starts again in that time
+  let seen = '';
+  for (let i = 0; i < 20; i++) {
+    const now = `${await statusOf(VAULT).catch(() => '?')}, mark ${await scanMarked(VAULT).catch(() => '?')}`;
+    if (now !== seen) { log(`before quitting: ${now}`); seen = now; }
+    await sleep(500);
+  }
 
   // later start, from the cache
   if (await killRoam('SIGTERM', 120000)) log('Roam had to be killed: it was still running 120 s after it was asked to quit');
   const s3 = sampler(`${size}/${build.label}/start`);
   await launchRoam();
+  log(`mark after relaunch, before the extension loads: ${await waitFor('the page', async () => String(await scanMarked(VAULT)), 15000).catch(() => '?')}`);
   await signIn(EMAIL, PASSWORD);
   await openGraph(GRAPH);
   const tg = Date.now();

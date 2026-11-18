@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A page with thousands of vault notes to list (one named like a common tag, for example) no longer
+  holds Roam up while they are all drawn. The first notes are drawn, and the rest as the page is scrolled.
+
 ## 0.1.1 (2026-11-17)
 
 Uses much less memory, most of all with large vaults.

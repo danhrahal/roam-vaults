@@ -355,6 +355,7 @@ var STYLES = `
 .rv-sec.rv-collapsed .rv-sec-body{display:none}
 .rv-sec-body{margin-top:4px}
 .rv-group{margin-bottom:10px}
+.rv-more{height:1px}
 .rv-group-head{align-items:center;gap:2px;flex-wrap:wrap}
 .rv-group-caret{cursor:pointer}
 .rv-group-title{margin-right:8px}
@@ -448,6 +449,8 @@ var groupOpen = /* @__PURE__ */ new Map();
 var caret = (open4, extra = "") => h("span", { class: `bp3-icon-standard bp3-icon-caret-down rm-caret ${open4 ? "rm-caret-open" : "rm-caret-closed"} ${extra}` });
 function renderPanel(el, vaults2) {
   el.className = "rv-panel";
+  drawing.get(el)?.disconnect();
+  drawing.delete(el);
   if (!vaults2.length) {
     el.replaceChildren();
     return;
@@ -469,9 +472,13 @@ function renderPanel(el, vaults2) {
     "div",
     { class: "rv-sec" + (collapsed ? " rv-collapsed" : "") },
     sectionHead(`${n} External Vault References`, !collapsed),
-    h("div", { class: "rv-sec-body" }, resultBody(ready, vaults2.length > 1))
+    h("div", { class: "rv-sec-body" }, resultBody(el, ready, vaults2.length > 1))
   ));
 }
+var ROWS_AT_ONCE = 60;
+var NEAR = "800px";
+var drawing = /* @__PURE__ */ new WeakMap();
+var reached = /* @__PURE__ */ new WeakMap();
 function sectionHead(label, open4 = true, tools = []) {
   const head = h(
     "div",
@@ -495,9 +502,9 @@ function sectionHead(label, open4 = true, tools = []) {
   });
   return head;
 }
-function resultBody(list, showVault) {
+function resultBody(panel, list, showVault) {
   const out = h("div", { class: "rv-groups" });
-  const group = (v, key, path, defOpen, extras, content) => {
+  const group = (v, key, path, defOpen, tag, content) => {
     const k = `${v.id}
 ${key}
 ${path}`;
@@ -534,7 +541,7 @@ ${path}`;
             path.replace(/\.md$/i, "")
           )
         ),
-        ...extras
+        tag ? h("span", { class: "rv-tagref" }, `#${tag}`) : null
       ),
       box
     );
@@ -544,25 +551,62 @@ ${path}`;
     loadPreview(el, path, v.act);
     return el;
   };
+  const rows = [];
   const tagsOf = new Map(list.map(({ v, r }) => [v, new Map(r.tagged.map((t) => [t.path, t.tag]))]));
-  const tagRef = (v, path) => {
+  const tagOnce = (v, path) => {
     const tags = tagsOf.get(v), t = tags.get(path);
     tags.delete(path);
-    return t ? h("span", { class: "rv-tagref" }, `#${t}`) : null;
+    return t;
   };
-  for (const { v, r } of list) for (const c of r.counterparts)
-    out.append(group(v, "page", c.path, false, [tagRef(v, c.path)], preview(v, c.path)));
-  for (const { v, r } of list) for (const b of r.backlinks)
-    out.append(group(
+  for (const { v, r } of list) for (const c of r.counterparts) {
+    const tag = tagOnce(v, c.path);
+    rows.push(() => group(v, "page", c.path, false, tag, preview(v, c.path)));
+  }
+  for (const { v, r } of list) for (const b of r.backlinks) {
+    const tag = tagOnce(v, b.path);
+    rows.push(() => group(
       v,
       "links",
       b.path,
       true,
-      [tagRef(v, b.path)],
+      tag,
       () => h("div", {}, ...b.lines.map((l) => blockEl(l.text, () => v.act.view(b.path, l.line))))
     ));
-  for (const { v, r } of list) for (const t of r.tagged) if (tagsOf.get(v).has(t.path))
-    out.append(group(v, "tag", t.path, false, [tagRef(v, t.path)], preview(v, t.path)));
+  }
+  for (const { v, r } of list) for (const t of r.tagged) {
+    const tag = tagOnce(v, t.path);
+    if (tag !== void 0) rows.push(() => group(v, "tag", t.path, false, tag, preview(v, t.path)));
+  }
+  const title = panel.dataset.title ?? "", before = reached.get(panel);
+  let drawn = 0;
+  const more = (n) => {
+    const part = rows.slice(drawn, drawn + n).map((row) => row());
+    drawn += part.length;
+    reached.set(panel, { title, n: drawn });
+    return part;
+  };
+  out.append(...more(Math.max(ROWS_AT_ONCE, before?.title === title ? before.n : 0)));
+  if (drawn < rows.length && typeof IntersectionObserver !== "undefined") {
+    const end = h("div", { class: "rv-more" });
+    out.append(end);
+    const io = new IntersectionObserver((entries) => {
+      if (!end.isConnected) {
+        io.disconnect();
+        return;
+      }
+      if (!entries.some((e) => e.isIntersecting)) return;
+      end.before(...more(ROWS_AT_ONCE));
+      io.unobserve(end);
+      if (drawn < rows.length) io.observe(end);
+      else {
+        end.remove();
+        io.disconnect();
+        drawing.delete(panel);
+      }
+    }, { rootMargin: `0px 0px ${NEAR} 0px`, scrollMargin: `0px 0px ${NEAR} 0px` });
+    io.observe(end);
+    drawing.set(panel, io);
+  } else if (drawn < rows.length) out.append(...more(rows.length));
   return out;
 }
 function blockEl(text, onclick) {

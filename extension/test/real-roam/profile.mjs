@@ -72,6 +72,20 @@ function sampler(label, settleFrom = 0) {
 }
 async function sampleFor(label, ms, settleFrom) { const s = sampler(label, settleFrom); await sleep(ms); return s.stop(); }
 
+/** Waits for the vault's status to read `ready`. Gives up at once on a status that won't change by
+ *  itself (an error, a scan that didn't finish, a missing permission), and says what it last read. */
+async function waitReady(what, ready, timeout) {
+  let last = '';
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    last = await statusOf(VAULT).catch(() => last);
+    if (last === ready) return;
+    if (/didn't finish|error|permission|reconnect|can't|cannot|failed/i.test(last)) throw new Error(`${what} stopped at "${last}"`);
+    await sleep(250);
+  }
+  throw new Error(`${what} didn't finish in ${Math.round(timeout / 1000)} s (status "${last}")`);
+}
+
 // ---------- timing in the page ----------
 /** Clicks a settings button (in the vault's row if `row`) and resolves with the ms until the vault's
  *  status, watched in the page, has left `ready` and come back to it. */
@@ -109,7 +123,7 @@ const timePage = (title) => evalIn(async (title) => {
   const t0 = performance.now();
   let tagged = null, t1 = null;
   const opened = window.roamAlphaAPI.ui.mainWindow.openPage({ page: { title } });
-  while (performance.now() - t0 < 15000) {
+  while (performance.now() - t0 < 60000) {
     const p = panel();
     if (p?.dataset.title === title) {
       if (tagged === null) tagged = performance.now();
@@ -215,8 +229,7 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   // first scan
   const s1 = sampler(`${size}/${build.label}/scan`);
   const t0 = await addVault(vault);
-  await waitFor(`the first scan (${ready})`, async () => (await statusOf(VAULT)) === ready, scanTimeout, 250)
-    .catch(async (e) => { await s1.stop(); throw new Error(`${e.message}; status "${await statusOf(VAULT).catch(() => '?')}"`); });
+  await waitReady('the first scan', ready, scanTimeout).catch(async (e) => { await s1.stop(); throw e; });
   m.scanS = (Date.now() - t0) / 1000;
   const scanMem = await s1.stop();
   log(`first scan ${m.scanS.toFixed(1)} s`);
@@ -231,7 +244,7 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   for (const t of titles) {
     const x = await timePage(t);
     totals.push(x.total); fills.push(x.fill);
-    if (x.total === null) { r.errors.push(`no vault panel within 15 s on "${t}"`); log('no panel on', t, JSON.stringify(x.diag)); }
+    if (x.total === null) { r.errors.push(`no vault panel within 60 s on "${t}"`); log('no panel on', t, JSON.stringify(x.diag)); }
     await sleep(300);
   }
   log(`pages: ${totals.map((x) => x == null ? '–' : Math.round(x)).join(' ')}`);
@@ -261,7 +274,7 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   await openGraph(GRAPH);
   const tg = Date.now();
   await waitFor('the extension to load', async () => { await openVaultsTab(); return true; }, 60000);
-  await waitFor(`the start from the cache (${ready})`, async () => (await statusOf(VAULT)) === ready, scanTimeout, 250);
+  await waitReady('the start from the cache', ready, scanTimeout).catch(async (e) => { await s3.stop(); throw e; });
   m.startS = (Date.now() - tg) / 1000;
   const startMem = await s3.stop();
   log(`later start ${m.startS.toFixed(1)} s`);

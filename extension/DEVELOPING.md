@@ -82,6 +82,31 @@ To run it by hand: install the Roam `.deb` and Xvfb, start `Xvfb :99`, then
 `DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… node test/real-roam/run.mjs` (`NOTES=2000` for a quicker run).
 A Roam profile that is already signed in skips the sign-in.
 
+## Profiling (GitHub Actions)
+
+`.github/workflows/profile.yml` runs `test/real-roam/profile.mjs` in the same real Roam as the run above
+and records, for each vault size and each build: the first scan's time and memory peak, memory settled
+after it, the worker heap, how long a Roam page takes to show its vault panel (and how much of that is
+the extension's own lookup and render), a Rescan with nothing changed, and a later start from the cache.
+The vault is the generated one from `test/vault-gen.mjs`, written to disk.
+
+It runs on demand: Actions > Profile > Run workflow, with the vault sizes (for example
+`10000,100000,1000000`) and the branches, tags or commits to compare (for example
+`main,claude/some-branch`; the first is the one the others are compared with). It also runs, at 10,000
+notes, on pull requests that change the profiler itself, but not on other pull requests.
+
+Each size is its own job; read its summary or download the `profile-<size>` artifact (RESULTS.md,
+profile.json, the memory log and screenshots). All builds of a job run one after another on the same
+runner, each in a freshly started Roam with none of the extension's state, so compare columns of one
+run rather than numbers across runs. The pages it opens are created in the test graph if missing.
+
+How long a job takes, per build: about 3 minutes at 10,000 notes, 5 at 100,000 and 25 at 1,000,000 (a
+million notes is 3.4 GB on disk; the job frees space on the runner first and may run for up to 6 hours).
+
+To run it by hand, as for the run above:
+`DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… SIZES=10000 BUILDS=a=/path/to/dist,b=/other/dist node test/real-roam/profile.mjs`.
+`node test/real-roam/genvault.mjs <notes> <folder>` writes just the vault.
+
 ## Memory
 
 A vault's cost is paid in three places: the worker's JavaScript heap (the index), the rest of Roam's renderer

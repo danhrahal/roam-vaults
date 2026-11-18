@@ -1,22 +1,28 @@
-// Writes the memory benchmark's deterministic vault (test/memory-bench.mjs, function gen) to a folder.
+// Writes the test vault (test/vault-gen.mjs) to a folder, one file at a time.
 //   node test/real-roam/genvault.mjs <notes> <folder>
 import fs from 'node:fs';
 import path from 'node:path';
+import { genFiles } from '../vault-gen.mjs';
 
+/** Returns { files, notes, mb, titles }: the number of files and of notes (a few generated titles
+ *  repeat in the same folder, so notes can be a little under n), MB of text, and the notes' titles
+ *  in generation order (daily notes, as YYYY-MM-DD, first). */
 export function genVault(n, out) {
-  const src = fs.readFileSync(path.join(import.meta.dirname, '../memory-bench.mjs'), 'utf8');
-  const start = src.indexOf('function gen(');
-  const end = src.indexOf('\n}\n', start) + 3;
-  if (start < 0 || end < 3) throw new Error('gen() not found in memory-bench.mjs');
-  const gen = new Function(`${src.slice(start, end)}\nreturn gen;`)();
+  const info = {}, paths = new Set(), made = new Set();
   let bytes = 0;
-  const files = gen(n);
-  for (const [rel, text] of files) {
-    const f = path.join(out, rel);
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, text); bytes += text.length;
+  for (const [rel, text] of genFiles(n, 42, info)) {
+    const f = path.join(out, rel), d = path.dirname(f);
+    if (!made.has(d)) { fs.mkdirSync(d, { recursive: true }); made.add(d); }
+    fs.writeFileSync(f, text);
+    bytes += text.length; paths.add(rel);
   }
-  return { files: files.size, mb: Math.round(bytes / 1e6) };
+  let notes = 0;
+  for (const p of paths) if (p.endsWith('.md')) notes++;
+  return { files: paths.size, notes, mb: Math.round(bytes / 1e6), titles: info.titles.map((x) => x.t) };
 }
 
-if (process.argv[1] === import.meta.filename) console.log(genVault(+process.argv[2], process.argv[3]));
+if (process.argv[1] === import.meta.filename) {
+  const t0 = Date.now();
+  const { files, notes, mb } = genVault(+process.argv[2], process.argv[3]);
+  console.log({ files, notes, mb, seconds: Math.round((Date.now() - t0) / 1000) });
+}

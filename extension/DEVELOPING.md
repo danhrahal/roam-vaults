@@ -82,6 +82,28 @@ To run it by hand: install the Roam `.deb` and Xvfb, start `Xvfb :99`, then
 `DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… node test/real-roam/run.mjs` (`NOTES=2000` for a quicker run).
 A Roam profile that is already signed in skips the sign-in.
 
+## Profiling (GitHub Actions)
+
+`.github/workflows/profile.yml` runs `test/real-roam/profile.mjs` in the same real Roam as the run above
+and records, for each vault size and each build: the first scan's time and memory peak, memory settled
+after it, the worker heap, how long a Roam page takes to show its vault panel (and how much of that is
+the extension's own lookup and render), a Rescan with nothing changed, and a later start from the cache.
+The vault is the generated one from `test/vault-gen.mjs`, written to disk.
+
+- Pull requests: 10,000 notes, the base branch and the pull request side by side.
+- Mondays: 10,000, 100,000 and 1,000,000 notes on `main`.
+- On demand (Actions > Profile > Run workflow): any sizes, and any branches, tags or commits to compare,
+  for example `main,claude/some-branch`. The first is the one the others are compared with.
+
+Each size is its own job; read its summary or download the `profile-<size>` artifact (RESULTS.md,
+profile.json, the memory log and screenshots). All builds of a job run one after another on the same
+runner, each in a freshly started Roam with none of the extension's state, so compare columns of one
+run rather than numbers across runs. The pages it opens are created in the test graph if missing.
+
+To run it by hand, as for the run above:
+`DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… SIZES=10000 BUILDS=a=/path/to/dist,b=/other/dist node test/real-roam/profile.mjs`.
+`node test/real-roam/genvault.mjs <notes> <folder>` writes just the vault.
+
 ## Memory
 
 A vault's cost is paid in three places: the worker's JavaScript heap (the index), the rest of Roam's renderer

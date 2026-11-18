@@ -27,7 +27,7 @@ import { genVault } from './genvault.mjs';
 import {
   roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, signIn, openGraph,
   dismissDialogs, openPage, openVaultsTab, loadDevExtension, statusOf, addVault, clearExtensionState,
-  workerHeapMB, shot,
+  workerHeapMB, shot, scanMarked,
 } from './roam.mjs';
 
 const EMAIL = process.env.ROAM_EMAIL, PASSWORD = process.env.ROAM_PASSWORD;
@@ -160,6 +160,7 @@ const METRICS = [
   ['fillMaxMs', 'Vault panel lookup and render, max (ms)'],
   ['rescanS', 'Rescan, nothing changed (s)'],
   ['rescanPeakMB', 'Rescan, memory peak (MB over baseline)'],
+  ['rescanSaveS', 'Rescan, saved (s after the status shows it done)'],
   ['startS', 'Later start from the cache (s after the graph opens)'],
   ['startPeakMB', 'Later start, memory peak (MB over baseline)'],
   ['startSettledMB', 'Later start, settled (MB over baseline)'],
@@ -280,10 +281,15 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   m.rescanPeakMB = rescanMem.peak - base;
   log(`rescan ${m.rescanS.toFixed(1)} s`);
   await dismissDialogs();
+  // the scan's mark stays until its results are saved: quitting before then is a scan that didn't finish
+  const tm = Date.now();
+  await waitFor('the Rescan to be saved', async () => !(await scanMarked(VAULT)), scanTimeout, 500);
+  m.rescanSaveS = (Date.now() - tm) / 1000;
+  log(`rescan saved ${m.rescanSaveS.toFixed(1)} s after its status`);
   await sleep(10000); // let the cache settle before quitting
 
   // later start, from the cache
-  await killRoam('SIGTERM');
+  if (await killRoam('SIGTERM', 120000)) log('Roam had to be killed: it was still running 120 s after it was asked to quit');
   const s3 = sampler(`${size}/${build.label}/start`);
   await launchRoam();
   await signIn(EMAIL, PASSWORD);

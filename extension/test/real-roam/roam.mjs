@@ -90,13 +90,17 @@ export async function launchRoam() {
   roam.page.on('crash', () => log('[crash] Roam\'s window crashed'));
   await roam.page.setViewportSize?.({ width: 1200, height: 773 }).catch(() => {});
 }
-export async function killRoam(signal = 'SIGKILL') {
+/** Stops Roam with `signal`, then kills what is still running after `grace` ms. Returns true if
+ *  anything had to be killed. */
+export async function killRoam(signal = 'SIGKILL', grace = 15000) {
   try { await roam.browser?.close(); } catch { /* already gone */ }
   roam.browser = null; roam.page = null;
   for (const pid of roamPids()) { try { process.kill(+pid, signal); } catch { /* gone */ } }
-  for (let i = 0; i < 30 && roamPids().length; i++) await sleep(500);
-  for (const pid of roamPids()) { try { process.kill(+pid, 'SIGKILL'); } catch { /* gone */ } }
+  for (let t = 0; t < grace && roamPids().length; t += 500) await sleep(500);
+  const left = roamPids();
+  for (const pid of left) { try { process.kill(+pid, 'SIGKILL'); } catch { /* gone */ } }
   await sleep(1000);
+  return signal !== 'SIGKILL' && left.length > 0;
 }
 export async function waitFor(label, fn, timeout = 30000, every = 250) {
   const t0 = Date.now();

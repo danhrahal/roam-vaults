@@ -90,10 +90,10 @@ after it, the worker heap, how long a Roam page takes to show its vault panel (a
 the extension's own lookup and render), a Rescan with nothing changed, and a later start from the cache.
 The vault is the generated one from `test/vault-gen.mjs`, written to disk.
 
-- Pull requests: 10,000 notes, the base branch and the pull request side by side.
-- Mondays: 10,000, 100,000 and 1,000,000 notes on `main`.
-- On demand (Actions > Profile > Run workflow): any sizes, and any branches, tags or commits to compare,
-  for example `main,claude/some-branch`. The first is the one the others are compared with.
+It runs on demand: Actions > Profile > Run workflow, with the vault sizes (for example
+`10000,100000,1000000`) and the branches, tags or commits to compare (for example
+`main,claude/some-branch`; the first is the one the others are compared with). It also runs, at 10,000
+notes, on pull requests that change the profiler itself, but not on other pull requests.
 
 Each size is its own job; read its summary or download the `profile-<size>` artifact (RESULTS.md,
 profile.json, the memory log and screenshots). All builds of a job run one after another on the same

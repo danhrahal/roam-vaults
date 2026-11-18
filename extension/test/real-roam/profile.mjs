@@ -199,6 +199,22 @@ function writeResults() {
 const quantile = (xs, q) => { const s = xs.filter((x) => x != null).sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(q * s.length))] : null; };
 let devLoaded = false;
 /** A fresh Roam running `build`, with none of the extension's state, on the neutral page. */
+/** Opens the extension's settings tab, waiting for the extension to load. Another dialog Roam opens
+ *  at start, or a Settings dialog opened before the extension added its tab, is closed and the
+ *  Settings dialog opened again. */
+async function waitForVaultsTab() {
+  let tries = 0;
+  await waitFor('the extension to load', async () => {
+    try { await openVaultsTab(); return true; } catch (e) {
+      const open = await evalIn(() => [...document.querySelectorAll('.bp3-dialog')].map((d) => d.querySelector('.bp3-heading, h4, h5')?.innerText?.trim() || d.className).join(' | ')).catch(() => '?');
+      log(`no settings tab yet (${e.message}); dialogs open: ${open || 'none'}`);
+      if (++tries === 1) await shot('no-settings-tab');
+      await dismissDialogs();
+      return false;
+    }
+  }, 150000, 1000);
+}
+
 async function freshRoam(build) {
   await killRoam('SIGTERM');
   serve(build.dist);
@@ -220,7 +236,7 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   const scanTimeout = Math.max(300000, size * 6);
   log(`--- ${size} notes, build ${build.label} ---`);
   await freshRoam(build);
-  await waitFor('the extension to load', async () => { await openVaultsTab(); return true; }, 60000);
+  await waitForVaultsTab();
   await dismissDialogs();
   await sleep(5000);
   m.baselineMB = (await sampleFor(`${size}/${build.label}/baseline`, 15000, 5000)).mean;
@@ -273,7 +289,7 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   await signIn(EMAIL, PASSWORD);
   await openGraph(GRAPH);
   const tg = Date.now();
-  await waitFor('the extension to load', async () => { await openVaultsTab(); return true; }, 60000);
+  await waitForVaultsTab();
   await waitReady('the start from the cache', ready, scanTimeout).catch(async (e) => { await s3.stop(); throw e; });
   m.startS = (Date.now() - tg) / 1000;
   const startMem = await s3.stop();

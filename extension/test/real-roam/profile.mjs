@@ -12,8 +12,9 @@
 //   - page render: opens 20 Roam pages whose titles the vault has notes for and times both "page open
 //     to vault panel filled" and "panel added to filled" (the extension's own lookup and render)
 //   - Rescan with nothing changed: time and peak
-//   - later start: quits and relaunches Roam, times the vault's start from its cache (from the graph
-//     opening to the "N notes" status) and the memory it settles at
+//   - later start: quits and relaunches Roam, opens a page the vault has notes for, and times the
+//     vault's start from its cache: from the graph opening to that page showing its vault notes, and
+//     to the "N notes" status (every file checked), and the memory it settles at
 // then removes the vault, which deletes its cache. Results go to $OUT/profile.json and
 // $OUT/RESULTS.md (a table per size with a column per build, and the change against the first
 // build). A step that fails or times out is recorded and the run goes on to the next build.
@@ -27,7 +28,7 @@ import { genVault } from './genvault.mjs';
 import {
   roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, signIn, openGraph,
   dismissDialogs, openPage, openVaultsTab, loadDevExtension, statusOf, addVault, clearExtensionState,
-  workerHeapMB, shot, scanMarked,
+  workerHeapMB, shot, scanMarked, panelText,
 } from './roam.mjs';
 
 const EMAIL = process.env.ROAM_EMAIL, PASSWORD = process.env.ROAM_PASSWORD;
@@ -161,7 +162,8 @@ const METRICS = [
   ['rescanS', 'Rescan, nothing changed (s)'],
   ['rescanPeakMB', 'Rescan, memory peak (MB over baseline)'],
   ['rescanSaveS', 'Rescan, saved (s after the status shows it done)'],
-  ['startS', 'Later start from the cache (s after the graph opens)'],
+  ['startPageS', 'Later start, a page shows its vault notes (s after the graph opens)'],
+  ['startS', 'Later start from the cache, every file checked (s after the graph opens)'],
   ['startPeakMB', 'Later start, memory peak (MB over baseline)'],
   ['startSettledMB', 'Later start, settled (MB over baseline)'],
 ];
@@ -302,11 +304,15 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   await signIn(EMAIL, PASSWORD);
   await openGraph(GRAPH);
   const tg = Date.now();
+  // a page the vault has notes for, to see when the vault can first answer
+  await openPage(titles[0]);
+  await waitFor('a page to show its vault notes', async () => !!(await panelText()).trim(), scanTimeout, 250).catch(async (e) => { await s3.stop(); throw e; });
+  m.startPageS = (Date.now() - tg) / 1000;
   await waitForVaultsTab();
   await waitReady('the start from the cache', ready, scanTimeout).catch(async (e) => { await s3.stop(); throw e; });
   m.startS = (Date.now() - tg) / 1000;
   const startMem = await s3.stop();
-  log(`later start ${m.startS.toFixed(1)} s`);
+  log(`later start: page ${m.startPageS.toFixed(1)} s, all checked ${m.startS.toFixed(1)} s`);
   await dismissDialogs();
   const settled2 = await sampleFor(`${size}/${build.label}/start-settle`, 30000, 15000);
   m.startPeakMB = Math.max(startMem.peak, settled2.peak) - base;

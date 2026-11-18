@@ -178,8 +178,9 @@ async function main() {
   }, 90000).catch(() => {});
   log(`before reload: ${BIG} "${await statusOf(BIG)}", mark ${await hasMark()}`);
   // Chromium writes localStorage to disk up to about 5 s after a change, so a mark set less than
-  // that before a crash is lost. Double the vault so the startup scan runs well past that.
-  const extra = genVault(NOTES, path.join(big, 'Extra'));
+  // that before a crash is lost. Make the vault six times the size so the startup scan runs well
+  // past that: a scan reads about 5,000 changed notes a second on a GitHub runner.
+  const extra = genVault(NOTES * 5, path.join(big, 'Extra'));
   log(`added ${extra.files} more files so the scan runs longer`);
   touchAll(big);
   await dismissDialogs();

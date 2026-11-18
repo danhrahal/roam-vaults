@@ -267,3 +267,94 @@ test('a folder event for a path that is a file, or that is gone, is handled', as
   assert.equal(await e.refreshFolders([{ path: 'Zettel' }]), false);
   assert.ok(e.idx.files.has('Zettel/Hiring neural.md'));
 });
+
+/** The same vault handed over a few files at a time, as the walker does. */
+function scanning(fs: ReturnType<typeof memFS>, size = 2) {
+  const asked: string[] = [];
+  const s: VaultFS & { asked: string[] } = {
+    ...fs,
+    asked,
+    async scan(each) {
+      const all = await fs.list();
+      const batches: Promise<void>[] = [];
+      for (let i = 0; i < all.length; i += size) {
+        const batch = all.slice(i, i + size);
+        batches.push(each(batch, async (want) => {
+          await new Promise((r) => setTimeout(r, 5 * (all.length - i))); // later batches answer first
+          return Promise.all(want.map((k) => { asked.push(batch[k].path); return batch[k].path === 'Broken.md' ? null : fs.readText(batch[k].path); }));
+        }));
+      }
+      await Promise.all(batches);
+    },
+  };
+  return s;
+}
+
+test('a scan fed in batches builds the same index, and reads only what the cache lacks', async () => {
+  const fs = memFS({ ...vault, 'pic.png': '', 'Broken.md': 'never read' });
+  const plain = new VaultEngine(memFS({ ...vault, 'pic.png': '' }));
+  const want = await plain.build();
+  const sfs = scanning(fs);
+  const e = new VaultEngine(sfs);
+  const progress: [number, number][] = [];
+  const stats = await e.build(new Map(), (d, t) => progress.push([d, t]));
+  assert.deepEqual(await shows(e, TITLES), await shows(plain, TITLES));
+  assert.deepEqual([...e.idx.notes.keys()], [...plain.idx.notes.keys()], 'notes are in the order walked, whichever batch answers first');
+  assert.equal(stats.notes, want.notes);
+  assert.equal(stats.files, want.files + 1);
+  assert.equal(stats.reread, want.reread);
+  assert.deepEqual(stats.errors, ['Broken.md: NotReadableError']);
+  assert.ok(e.idx.files.has('pic.png'));
+  assert.deepEqual(progress, [[stats.notes + 1, stats.notes + 1]], 'a first scan has no total to count towards');
+
+  // again, from that scan's notes: one note changed, one gone
+  fs.write('Zettel/Hiring neural.md', 'Rewritten, about [[Ridley Scott]].\n');
+  fs.rm('project alpha.md');
+  sfs.asked.length = 0; progress.length = 0;
+  const next = new VaultEngine(sfs);
+  const again = await next.build(e.cache, (d, t) => progress.push([d, t]));
+  assert.deepEqual(sfs.asked.sort(), ['Broken.md', 'Zettel/Hiring neural.md']);
+  assert.equal(again.reread, 1);
+  assert.equal(next.unsaved.get('project alpha.md'), null);
+  assert.ok(progress.length > 1 && progress.every(([d, t]) => d <= t && t >= again.notes), 'counts towards the notes there were');
+  const fresh2 = new VaultEngine(memFS(Object.fromEntries(Object.entries(vault).filter(([p]) => p !== 'project alpha.md').map(([p, t]) => [p, p === 'Zettel/Hiring neural.md' ? 'Rewritten, about [[Ridley Scott]].\n' : t]))));
+  await fresh2.build();
+  assert.deepEqual(await shows(next, TITLES), await shows(fresh2, TITLES));
+});
+
+for (const how of ['listed', 'handed over in batches'] as const) {
+  test(`a vault that has an index is checked in place (${how})`, async () => {
+    const fs = memFS({ ...vault, 'pic.png': '' });
+    const first = await fresh(fs);
+    const use = how === 'listed' ? fs : scanning(fs);
+    // a later session: the notes come from the cache, the files have not been looked at yet
+    const e = new VaultEngine(use);
+    e.adopt(new Map(first.cache));
+    assert.deepEqual(await shows(e, TITLES), await shows(first, TITLES), 'answers from the cache before any file is read');
+    assert.ok(!e.idx.files.has('pic.png'), 'attachments are not in the cache');
+
+    let reads = fs.reads();
+    const same = await e.check();
+    assert.equal(fs.reads() - reads, 0, 'nothing is read while sizes and times match');
+    assert.deepEqual([same.reread, same.notes, same.files], [0, first.idx.notes.size, first.idx.files.size]);
+    assert.ok(e.idx.files.has('pic.png'));
+    assert.equal(e.unsaved.size, 0);
+    assert.equal((await e.check()).changed, false, 'a check that finds nothing new says so');
+
+    fs.write('Zettel/Hiring neural.md', 'Rewritten, about [[Ridley Scott]].\n');
+    fs.write('Inbox/New idea.md', '- about [[Project Alpha]]\n- #project\n');
+    fs.write('doc.pdf', '');
+    fs.rm('project alpha.md');
+    fs.rm('pic.png');
+    reads = fs.reads();
+    const progress: [number, number][] = [];
+    const stats = await e.check((d, t) => progress.push([d, t]));
+    assert.equal(fs.reads() - reads, 2, 'only the changed and the new note are read');
+    assert.deepEqual([stats.changed, stats.reread, stats.notes], [true, 2, first.idx.notes.size]);
+    assert.deepEqual(await shows(e, TITLES), await shows(await fresh(fs), TITLES));
+    assert.deepEqual([...e.idx.files.keys()].sort(), [...(await fresh(fs)).idx.files.keys()].sort());
+    assert.deepEqual([...e.unsaved].map(([p, n]) => [p, !!n]).sort(), [['Inbox/New idea.md', true], ['Zettel/Hiring neural.md', true], ['project alpha.md', false]]);
+    assert.ok(progress.every(([d, t]) => d <= t), 'progress never passes its total');
+    assert.deepEqual(progress.at(-1), [stats.notes, stats.notes]);
+  });
+}

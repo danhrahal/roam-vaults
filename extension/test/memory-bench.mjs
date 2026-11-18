@@ -157,7 +157,7 @@ async function loadExtension(ctx, p) {
     // count the vault walks: each one reports "indexing" first
     window.__walks = 0;
     const W = window.Worker;
-    window.Worker = class extends W { constructor(...a) { super(...a); this.addEventListener('message', ({ data }) => { if (data?.type === 'status' && data.state === 'indexing' && data.detail === 'reading files') window.__walks++; }); } };
+    window.Worker = class extends W { constructor(...a) { super(...a); this.addEventListener('message', ({ data }) => { if (data?.type === 'status' && (data.detail === 'reading files' || data.scanning === 'reading files')) window.__walks++; }); } };
     window.__title = 'Start';
     window.roamAlphaAPI = { ui: { mainWindow: { getOpenPageOrBlockUid: async () => 'uid' } }, pull: () => ({ ':node/title': window.__title }) };
     window.__effects = [];
@@ -230,7 +230,11 @@ p = await openPage(ctx);
 base = null;
 await settle(p, 'page without the extension');
 await loadExtension(ctx, p);
+await p.evaluate(() => { window.__title = 'Alpha'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+const tStart = Date.now();
 await press(p, 'Add vault folder');
+await p.waitForFunction(() => !!document.querySelector('.rv-panel .rv-sec-head strong')?.textContent, null, { timeout: 900000, polling: 100 });
+console.log(`start from the cache: a page shows its vault notes after ${Date.now() - tStart} ms`);
 console.log(`start from the cache took ${await indexed(p)} ms`);
 await settle(p, 'later start: just finished');
 await settle(p, 'later start: idle', IDLE);

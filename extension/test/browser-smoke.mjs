@@ -396,6 +396,52 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   await q.context().close();
 }
 
+{ // a page with hundreds of notes to list draws the first of them, and the rest as it is scrolled
+  const q = await fresh();
+  await q.setViewportSize({ width: 900, height: 700 });
+  const TAGGED = 400;
+  await q.evaluate(async (TAGGED) => {
+    // as in Roam, the page scrolls inside a box of its own, not the window
+    const wrap = document.createElement('div'); wrap.id = 'scroller'; wrap.style.cssText = 'height:100vh;overflow:auto';
+    document.body.prepend(wrap); wrap.append(document.querySelector('.roam-article'));
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    for (let i = 0; i < TAGGED; i++) {
+      const w = await (await vault.getFileHandle(`Tagged ${String(i).padStart(3, '0')}.md`, { create: true })).createWritable();
+      await w.write('about #project-alpha\n'); await w.close();
+    }
+    await window.__ext.onload({ extensionAPI: window.__api });
+  }, TAGGED);
+  await mountSettings(q);
+  await press(q, 'Add vault folder');
+  await q.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('Tagged 000'), null, { timeout: 15000 });
+  const groups = () => q.locator('.rv-group').count();
+  const first = await groups();
+  ok('a long list draws only its first notes', first === 60 && (await q.locator('.rv-sec-head').textContent()).includes(`${TAGGED + 1} External Vault References`));
+  // scrolling to the end of what is drawn brings more, until every note is there
+  let n = first;
+  for (let i = 0; i < 40 && n < TAGGED + 1; i++) {
+    await q.evaluate(() => { const s = document.querySelector('#scroller'); s.scrollTop = s.scrollHeight; });
+    await q.waitForFunction((n) => document.querySelectorAll('.rv-group').length > n, n, { timeout: 3000 }).catch(() => {});
+    const now = await groups();
+    if (i === 0) ok('scrolling near the end of the list draws more', now > first && now < TAGGED + 1);
+    if (now === n) break;
+    n = now;
+  }
+  ok('scrolling on draws every note, each once, in order', n === TAGGED + 1 && await q.evaluate((TAGGED) => {
+    const names = [...document.querySelectorAll('.rv-note')].map((e) => e.textContent);
+    return new Set(names).size === names.length && names[0] === 'Other' && names[1] === 'Tagged 000' && names[TAGGED] === `Tagged ${TAGGED - 1}` && !document.querySelector('.rv-more');
+  }, TAGGED));
+  // a change in the vault draws the list again: it stays as long as it had got
+  await q.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    const w = await (await vault.getFileHandle('Tagged late.md', { create: true })).createWritable();
+    await w.write('also #project-alpha\n'); await w.close();
+  });
+  await q.waitForFunction(() => document.querySelector('.rv-sec-head')?.textContent.includes('402 External'), null, { timeout: 5000 }).catch(() => {});
+  ok('a list drawn again after a change keeps its length', (await groups()) >= TAGGED + 1);
+  await q.context().close();
+}
+
 for (const [n, pass] of checks) console.log(pass ? 'PASS' : 'FAIL', n);
 await browser.close(); server.close();
 process.exit(checks.every(([, pass]) => pass) ? 0 : 1);

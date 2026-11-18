@@ -37,7 +37,8 @@ export interface PageResult {
   backlinks: Backlink[];
   tagged: Tagged[];
 }
-export interface BuildStats { notes: number; files: number; reread: number; cached: number; errors: string[]; ms: number }
+/** `changed`: did the scan leave the index different from how it found it? */
+export interface BuildStats { notes: number; files: number; reread: number; cached: number; changed: boolean; errors: string[]; ms: number }
 
 /** Tiers 1–5 of FEASIBILITY.md §5: the strong matches shown in the MVP. */
 const TIER_LABEL: Partial<Record<NoteHow, string>> = {
@@ -68,7 +69,7 @@ export class VaultEngine {
   private textChars = 0;
 
   private fs: VaultFS;
-  private dailyFormats: string[];
+  readonly dailyFormats: string[];
   constructor(fs: VaultFS, dailyFormats: string[] = ['YYYY-MM-DD']) { this.fs = fs; this.dailyFormats = dailyFormats; }
 
   /** The parsed notes, for the next scan to start from. */
@@ -112,8 +113,15 @@ export class VaultEngine {
     for (const path of cache.keys()) if (!this.idx.notes.has(path)) unsaved.set(path, null);
     this.unsaved = unsaved;
     onProgress?.(done, done);
-    return { notes: ok.length, files, reread, cached: ok.length - reread, errors, ms: Date.now() - t0 };
+    return { notes: ok.length, files, reread, cached: ok.length - reread, changed: true, errors, ms: Date.now() - t0 };
   }
+
+  /**
+   * Answer from the notes an earlier session left in the cache, before any file has been looked
+   * at. check() then brings the index up to date. Attachments aren't in the cache: a link to one
+   * counts as unresolved until then.
+   */
+  adopt(cache: Cache) { this.use([...cache.values()], []); }
 
   private use(notes: Note[], other: string[]) {
     this.idx = new VaultIndex();
@@ -123,6 +131,57 @@ export class VaultEngine {
     this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats, sanitized: false });
     this.texts.clear(); this.textChars = 0;
     clearInterned();
+  }
+
+  /**
+   * Full scan of a vault that already has an index: the index stays in use and only what differs
+   * on disk is changed in it, so a scan that finds nothing new costs the walk and nothing else.
+   */
+  async check(onProgress?: (done: number, total: number) => void): Promise<BuildStats> {
+    const t0 = Date.now();
+    const errors: string[] = [];
+    const seen = new Set<string>();
+    const before = this.idx.notes.size;
+    let files = 0, reread = 0, done = 0, changed = false;
+    await this.scan(async (batch, read) => {
+      files += batch.length;
+      const want: number[] = [];
+      batch.forEach((f, k) => {
+        const c = this.idx.notes.get(f.path);
+        // The index's own copy of the path where it has one: a million more strings would be 100 MB.
+        seen.add(c ? c.path : f.path);
+        if (!MD.test(f.path)) { if (!this.idx.files.has(f.path)) { this.idx.addAttachment(f.path); changed = true; } return; }
+        if (c && c.size === f.size && c.mtime === f.mtime) done++; else want.push(k);
+      });
+      const texts = await read(want);
+      want.forEach((k, j) => {
+        const f = batch[k];
+        done++;
+        this.forget(f.path);
+        try {
+          const note = toNote(parseNote(f.path, readable(texts[j])), f.size, f.mtime);
+          this.idx.upsertNote(note);
+          this.unsaved.set(f.path, note);
+          reread++; changed = true;
+        } catch (e) {
+          errors.push(`${f.path}: ${(e as Error).name}`);
+          // As after build(): a note that can't be read is not in the index.
+          if (this.idx.notes.has(f.path)) { this.idx.removeFile(f.path); this.unsaved.set(f.path, null); changed = true; }
+        }
+      });
+      onProgress?.(done, Math.max(done, before));
+    });
+    for (const p of [...this.idx.files.keys()]) {
+      if (seen.has(p)) continue;
+      this.forget(p);
+      this.idx.removeFile(p);
+      if (MD.test(p)) this.unsaved.set(p, null);
+      changed = true;
+    }
+    clearInterned();
+    onProgress?.(done, done);
+    const notes = this.idx.notes.size;
+    return { notes, files, reread, cached: notes - reread, changed, errors, ms: Date.now() - t0 };
   }
 
   private scan(each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void> {

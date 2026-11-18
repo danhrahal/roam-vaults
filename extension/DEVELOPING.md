@@ -51,6 +51,11 @@ Roam Depot tab.
 - Parsed notes are cached in IndexedDB, one record per note, checked against the file's size and modification
   time, so later starts only re-read changed files and an edit writes one record. Removing a vault deletes
   its cache.
+- At a later start the index is built from the cache alone and pages are answered from it straight away.
+  The vault's files are then checked in the background (`check()` in `engine.ts`): the index stays in use
+  and only what differs on disk is changed in it. Rescan does the same. Settings show the scan's progress
+  meanwhile, and the scan mark (see `scan-mark.ts`) is set as for any scan. Only a first scan, or a change
+  of the vault's daily note format, builds a whole index in one go.
 - Folder handles are kept in this device's IndexedDB, never in Roam settings, which sync through the graph.
 - `FileSystemObserver` watches the folder, so edits made in Obsidian or any editor show up within a second.
   A file event re-checks that file. A folder that appears, goes away or moves is walked on its own

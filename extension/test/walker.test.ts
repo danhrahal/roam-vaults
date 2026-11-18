@@ -8,7 +8,7 @@ const answers = new Map<number, (m: any) => void>();
 const statuses: string[] = [];
 (globalThis as any).self = {
   location: { href: 'blob:indexer' },
-  postMessage(m: any) { if (m.id !== undefined) answers.get(m.id)?.(m); else if (m.type === 'status') statuses.push(`${m.state} ${m.detail}`); },
+  postMessage(m: any) { if (m.id !== undefined) answers.get(m.id)?.(m); else if (m.type === 'status') statuses.push(`${m.state} ${m.detail}${m.scanning ? ` (${m.scanning})` : ''}`); },
 };
 (globalThis as any).indexedDB = { open() { throw new Error('no IndexedDB here'); } };
 let fire: (records: any[]) => void = () => {};
@@ -151,7 +151,9 @@ test('a rescan with one note changed reads that note only', async () => {
   assert.equal(opens, ALL - 1);
   assert.equal(texts, 1 + 3);
   assert.deepEqual([walkers, ended], [2, 2]);
-  assert.match(statuses[1], new RegExp(`^indexing \\d+ of ${ALL} notes$`), 'counts towards the notes there were');
+  assert.equal(statuses[0], `ready ${ALL} notes (reading files)`, 'the vault stays ready while its files are checked');
+  assert.match(statuses[1], new RegExp(`^ready ${ALL} notes \\(\\d+ of ${ALL} notes\\)$`), 'counts towards the notes there were');
+  assert.equal(statuses.at(-1), `ready ${ALL - 1} notes`);
   const b = (await call('query', { title: 'Elsewhere' })).result.backlinks.map((x: any) => x.path);
   assert.deepEqual(b, ['Notes/3/Note 3.md']);
 });

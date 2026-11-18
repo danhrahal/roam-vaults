@@ -8,6 +8,11 @@
   and read in a helper that exists only for the scan, so the file handles a scan makes are given back as
   it goes instead of piling up next to the index.
 - A first scan is faster: each note is looked up on disk once instead of twice.
+- After Roam starts, pages show their vault notes as soon as the saved index is loaded, instead of after
+  every file in the vault has been checked. The check then runs in the background and settings show its
+  progress.
+- Rescan, and the check at start, change the index in place instead of building a second one beside it,
+  so pages keep their vault notes while it runs and it needs less memory.
 
 ## 0.1.1 (2026-11-17)
 

@@ -32,7 +32,8 @@ let notLiveWhy = '';
 
 const post = (msg: unknown) => self.postMessage(msg);
 let shown = ''; // the state last reported
-const status = (state: string, detail = '') => { shown = state; post({ type: 'status', state, detail, live, notLiveWhy }); };
+// `scanning` is the progress of a scan that runs while the index can already answer.
+const status = (state: string, detail = '', scanning = '') => { shown = state; post({ type: 'status', state, detail, scanning, live, notLiveWhy }); };
 const noteCount = (n: number) => `${n} ${n === 1 ? 'note' : 'notes'}`;
 
 // ---------- file system over a FileSystemDirectoryHandle ----------
@@ -295,13 +296,35 @@ async function watch() {
 // ---------- commands ----------
 async function build() {
   building++;
-  status('indexing', 'reading files');
+  if (!engine) status('indexing', 'reading files');
   try {
     if (!root) throw new Error('The vault is not connected.');
-    // The index in use stays in place until the new one is complete. Its notes are the cache
-    // for the new one; only the first scan reads the saved cache.
-    const next = new VaultEngine(handleFS, await dailyFormats());
-    const stats = await next.build(engine ? engine.cache : await loadCache(vaultKey), (done, total) => status('indexing', `${done} of ${total} notes`));
+    const formats = await dailyFormats();
+    // A vault scanned in an earlier session answers from its saved notes straight away. Its files
+    // are then checked like those of any vault that has an index: the index stays in use, and
+    // only what differs on disk is changed in it.
+    if (!engine) {
+      const cache = await loadCache(vaultKey);
+      if (cache.size) (engine = new VaultEngine(handleFS, formats)).adopt(cache);
+    }
+    const e = engine;
+    if (e && e.dailyFormats.join('\n') === formats.join('\n')) {
+      const notes = () => noteCount(e.idx.notes.size);
+      // After a scan that failed, pages show nothing from this vault until one succeeds.
+      const failed = shown === 'error';
+      const progress = (text: string) => failed ? status('indexing', text) : status('ready', notes(), text);
+      progress('reading files');
+      const stats = await e.check((done, total) => progress(`${done} of ${total} notes`));
+      saveCacheSoon(e);
+      status('ready', notes());
+      if (stats.changed) post({ type: 'changed', paths: [] });
+      return stats;
+    }
+    // A first scan, or the vault's daily note format changed: a new index, built in one go. The
+    // one in use stays in place until it is complete, and its notes are the cache for the new one.
+    if (e) status('indexing', 'reading files');
+    const next = new VaultEngine(handleFS, formats);
+    const stats = await next.build(e ? e.cache : new Map(), (done, total) => status('indexing', `${done} of ${total} notes`));
     engine = next;
     saveCacheSoon(next);
     status('ready', noteCount(stats.notes));

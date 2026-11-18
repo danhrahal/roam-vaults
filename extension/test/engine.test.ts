@@ -321,3 +321,40 @@ test('a scan fed in batches builds the same index, and reads only what the cache
   await fresh2.build();
   assert.deepEqual(await shows(next, TITLES), await shows(fresh2, TITLES));
 });
+
+for (const how of ['listed', 'handed over in batches'] as const) {
+  test(`a vault that has an index is checked in place (${how})`, async () => {
+    const fs = memFS({ ...vault, 'pic.png': '' });
+    const first = await fresh(fs);
+    const use = how === 'listed' ? fs : scanning(fs);
+    // a later session: the notes come from the cache, the files have not been looked at yet
+    const e = new VaultEngine(use);
+    e.adopt(new Map(first.cache));
+    assert.deepEqual(await shows(e, TITLES), await shows(first, TITLES), 'answers from the cache before any file is read');
+    assert.ok(!e.idx.files.has('pic.png'), 'attachments are not in the cache');
+
+    let reads = fs.reads();
+    const same = await e.check();
+    assert.equal(fs.reads() - reads, 0, 'nothing is read while sizes and times match');
+    assert.deepEqual([same.reread, same.notes, same.files], [0, first.idx.notes.size, first.idx.files.size]);
+    assert.ok(e.idx.files.has('pic.png'));
+    assert.equal(e.unsaved.size, 0);
+    assert.equal((await e.check()).changed, false, 'a check that finds nothing new says so');
+
+    fs.write('Zettel/Hiring neural.md', 'Rewritten, about [[Ridley Scott]].\n');
+    fs.write('Inbox/New idea.md', '- about [[Project Alpha]]\n- #project\n');
+    fs.write('doc.pdf', '');
+    fs.rm('project alpha.md');
+    fs.rm('pic.png');
+    reads = fs.reads();
+    const progress: [number, number][] = [];
+    const stats = await e.check((d, t) => progress.push([d, t]));
+    assert.equal(fs.reads() - reads, 2, 'only the changed and the new note are read');
+    assert.deepEqual([stats.changed, stats.reread, stats.notes], [true, 2, first.idx.notes.size]);
+    assert.deepEqual(await shows(e, TITLES), await shows(await fresh(fs), TITLES));
+    assert.deepEqual([...e.idx.files.keys()].sort(), [...(await fresh(fs)).idx.files.keys()].sort());
+    assert.deepEqual([...e.unsaved].map(([p, n]) => [p, !!n]).sort(), [['Inbox/New idea.md', true], ['Zettel/Hiring neural.md', true], ['project alpha.md', false]]);
+    assert.ok(progress.every(([d, t]) => d <= t), 'progress never passes its total');
+    assert.deepEqual(progress.at(-1), [stats.notes, stats.notes]);
+  });
+}

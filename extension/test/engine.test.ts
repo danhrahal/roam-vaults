@@ -267,3 +267,57 @@ test('a folder event for a path that is a file, or that is gone, is handled', as
   assert.equal(await e.refreshFolders([{ path: 'Zettel' }]), false);
   assert.ok(e.idx.files.has('Zettel/Hiring neural.md'));
 });
+
+/** The same vault handed over a few files at a time, as the walker does. */
+function scanning(fs: ReturnType<typeof memFS>, size = 2) {
+  const asked: string[] = [];
+  const s: VaultFS & { asked: string[] } = {
+    ...fs,
+    asked,
+    async scan(each) {
+      const all = await fs.list();
+      const batches: Promise<void>[] = [];
+      for (let i = 0; i < all.length; i += size) {
+        const batch = all.slice(i, i + size);
+        batches.push(each(batch, async (want) => {
+          await new Promise((r) => setTimeout(r, 5 * (all.length - i))); // later batches answer first
+          return Promise.all(want.map((k) => { asked.push(batch[k].path); return batch[k].path === 'Broken.md' ? null : fs.readText(batch[k].path); }));
+        }));
+      }
+      await Promise.all(batches);
+    },
+  };
+  return s;
+}
+
+test('a scan fed in batches builds the same index, and reads only what the cache lacks', async () => {
+  const fs = memFS({ ...vault, 'pic.png': '', 'Broken.md': 'never read' });
+  const plain = new VaultEngine(memFS({ ...vault, 'pic.png': '' }));
+  const want = await plain.build();
+  const sfs = scanning(fs);
+  const e = new VaultEngine(sfs);
+  const progress: [number, number][] = [];
+  const stats = await e.build(new Map(), (d, t) => progress.push([d, t]));
+  assert.deepEqual(await shows(e, TITLES), await shows(plain, TITLES));
+  assert.deepEqual([...e.idx.notes.keys()], [...plain.idx.notes.keys()], 'notes are in the order walked, whichever batch answers first');
+  assert.equal(stats.notes, want.notes);
+  assert.equal(stats.files, want.files + 1);
+  assert.equal(stats.reread, want.reread);
+  assert.deepEqual(stats.errors, ['Broken.md: NotReadableError']);
+  assert.ok(e.idx.files.has('pic.png'));
+  assert.deepEqual(progress, [[stats.notes + 1, stats.notes + 1]], 'a first scan has no total to count towards');
+
+  // again, from that scan's notes: one note changed, one gone
+  fs.write('Zettel/Hiring neural.md', 'Rewritten, about [[Ridley Scott]].\n');
+  fs.rm('project alpha.md');
+  sfs.asked.length = 0; progress.length = 0;
+  const next = new VaultEngine(sfs);
+  const again = await next.build(e.cache, (d, t) => progress.push([d, t]));
+  assert.deepEqual(sfs.asked.sort(), ['Broken.md', 'Zettel/Hiring neural.md']);
+  assert.equal(again.reread, 1);
+  assert.equal(next.unsaved.get('project alpha.md'), null);
+  assert.ok(progress.length > 1 && progress.every(([d, t]) => d <= t && t >= again.notes), 'counts towards the notes there were');
+  const fresh2 = new VaultEngine(memFS(Object.fromEntries(Object.entries(vault).filter(([p]) => p !== 'project alpha.md').map(([p, t]) => [p, p === 'Zettel/Hiring neural.md' ? 'Rewritten, about [[Ridley Scott]].\n' : t]))));
+  await fresh2.build();
+  assert.deepEqual(await shows(next, TITLES), await shows(fresh2, TITLES));
+});

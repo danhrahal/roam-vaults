@@ -15,7 +15,15 @@ export interface VaultFS {
   readText(path: string): Promise<string>;
   /** Metadata for one path, or null if it no longer exists. */
   stat(path: string): Promise<FileMeta | null>;
+  /**
+   * The whole vault, handed over as it is walked, for a full scan to use in place of list() and
+   * readText(). `each` gets some of the files and a function that reads the text of the ones named
+   * by their position among them (null for one that can't be read); it may be called for a few
+   * batches at once, and whatever it throws ends the scan.
+   */
+  scan?(each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void>;
 }
+export type ReadBatch = (want: number[]) => Promise<(string | null)[]>;
 /** Notes from an earlier scan, by path. A note is used again while its file's size and time match. */
 export type Cache = Map<string, Note>;
 
@@ -48,6 +56,8 @@ const MAX_BACKLINK_NOTES = 200;
 /** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
 const MAX_TEXT_CHARS = 1_000_000;
 const READS_AT_ONCE = 16;
+/** Files handed over at a time by a scan. */
+export const SCAN_BATCH = 500;
 
 export class VaultEngine {
   idx = new VaultIndex();
@@ -65,42 +75,58 @@ export class VaultEngine {
   get cache(): Cache { return this.idx.notes; }
 
   /** Full scan. Files whose size and mtime match the cache are not re-read. */
-  async build(cache: Cache = new Map(), onProgress?: (done: number, total: number) => void, concurrency = 32): Promise<BuildStats> {
+  async build(cache: Cache = new Map(), onProgress?: (done: number, total: number) => void): Promise<BuildStats> {
     const t0 = Date.now();
-    const all = await this.fs.list();
-    const md = all.filter((f) => MD.test(f.path));
-    const other = all.filter((f) => !MD.test(f.path)).map((f) => f.path);
-    const notes: Note[] = new Array(md.length);
     const errors: string[] = [];
     const unsaved = new Map<string, Note | null>();
-    let reread = 0, done = 0, i = 0;
-    const work = async () => {
-      while (i < md.length) {
-        const k = i++, f = md[k];
+    const other: string[] = [];
+    const batches: Note[][] = []; // in the order walked, whichever batch is finished first
+    let files = 0, reread = 0, done = 0;
+    await this.scan(async (batch, read) => {
+      const notes: Note[] = [];
+      batches.push(notes);
+      files += batch.length;
+      const want: number[] = [];
+      batch.forEach((f, k) => {
+        if (!MD.test(f.path)) { other.push(f.path); return; }
         const c = cache.get(f.path);
-        if (c && c.size === f.size && c.mtime === f.mtime) notes[k] = c;
-        else {
-          try {
-            unsaved.set(f.path, notes[k] = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime));
-            reread++;
-          } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
-        }
-        if (++done % 50 === 0) onProgress?.(done, md.length);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, md.length || 1) }, work));
-    const ok = notes.filter(Boolean);
-    this.idx = new VaultIndex();
-    this.idx.preferNearby = true;
-    this.idx.build(ok, other);
-    // Only the strong matches are shown, so the weaker lookup tables are not built.
-    this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats, sanitized: false });
+        if (c && c.size === f.size && c.mtime === f.mtime) { notes.push(c); done++; } else want.push(k);
+      });
+      const texts = await read(want);
+      want.forEach((k, j) => {
+        const f = batch[k];
+        done++;
+        try {
+          const note = toNote(parseNote(f.path, readable(texts[j])), f.size, f.mtime);
+          notes.push(note);
+          unsaved.set(f.path, note);
+          reread++;
+        } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
+      });
+      // The number of notes isn't known until the walk is over. A vault scanned before has about
+      // as many as last time; for a first scan there is nothing to count towards.
+      if (cache.size) onProgress?.(done, Math.max(done, cache.size));
+    });
+    const ok = batches.flat();
+    this.use(ok, other);
     for (const path of cache.keys()) if (!this.idx.notes.has(path)) unsaved.set(path, null);
     this.unsaved = unsaved;
+    onProgress?.(done, done);
+    return { notes: ok.length, files, reread, cached: ok.length - reread, errors, ms: Date.now() - t0 };
+  }
+
+  private use(notes: Note[], other: string[]) {
+    this.idx = new VaultIndex();
+    this.idx.preferNearby = true;
+    this.idx.build(notes, other);
+    // Only the strong matches are shown, so the weaker lookup tables are not built.
+    this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats, sanitized: false });
     this.texts.clear(); this.textChars = 0;
     clearInterned();
-    onProgress?.(md.length, md.length);
-    return { notes: ok.length, files: all.length, reread, cached: ok.length - reread, errors, ms: Date.now() - t0 };
+  }
+
+  private scan(each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void> {
+    return this.fs.scan ? this.fs.scan(each) : scanByList(this.fs, each);
   }
 
   /** Re-check specific paths after a watcher event. Returns true if anything changed. */
@@ -256,6 +282,26 @@ export class VaultEngine {
   private forget(path: string) {
     const t = this.texts.get(path);
     if (t !== undefined) { this.texts.delete(path); this.textChars -= t.length; }
+  }
+}
+
+function readable(text: string | null | undefined): string {
+  if (text == null) throw new DOMException('unreadable', 'NotReadableError');
+  return text;
+}
+
+/** scan() for a file system that has none: list everything, then read what is asked for. */
+export async function scanByList(fs: VaultFS, each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void> {
+  const all = await fs.list();
+  for (let i = 0; i < all.length; i += SCAN_BATCH) {
+    const batch = all.slice(i, i + SCAN_BATCH);
+    await each(batch, async (want) => {
+      const texts: (string | null)[] = [];
+      for (let k = 0; k < want.length; k += READS_AT_ONCE) {
+        texts.push(...await Promise.all(want.slice(k, k + READS_AT_ONCE).map((w) => fs.readText(batch[w].path).catch(() => null))));
+      }
+      return texts;
+    });
   }
 }
 

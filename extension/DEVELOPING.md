@@ -36,9 +36,14 @@ Roam Depot tab.
 
 ## How it works
 
-- Each vault has its own Web Worker. It walks the vault, parses every `.md` file and builds a link index.
+- Each vault has its own Web Worker, the indexer. It parses every `.md` file and builds a link index.
   The worker is bundled into `extension.js` as a string at build time and started from a Blob URL, so the
   extension stays a single file and never loads code from the network.
+- A scan's file access is done by a second worker, the walker (`walker.ts`), which the indexer starts from
+  its own URL for each scan and ends when the scan is over. The walker walks the vault and tells the
+  indexer what it found, 500 files at a time; the indexer answers with the notes its cache doesn't cover,
+  and the walker reads those from the `File` objects it already has. See [Memory](#memory) for why. A
+  folder that changes while the vault is open is walked by the indexer itself (`walk.ts` is shared).
 - The index keeps one small record per note: its path, aliases, tags, and each link's target and line. Links
   are resolved when a page asks for them, so there is no object per link. The worker keeps a handle for each
   folder, not for each note, because every live file handle also costs memory in Roam's main process. See
@@ -134,7 +139,14 @@ Things that made 0.1.0 heavy, to keep out:
 
 - A `FileSystemFileHandle` kept per note. About 10 KB each across the two processes.
 - File handles and `File` objects left for the garbage collector during a scan. It can't see what they
-  cost, so 40,000 of them piled up before it ran. `madeHandles()` in `worker.ts` brings it forward.
+  cost, so 40,000 of them piled up before it ran. `madeHandles()` in `walk.ts` brings it forward.
+- Walking the vault in the worker that holds the index. `madeHandles()` only works in a worker whose own
+  heap is small: with the index of 100,000 notes in the same heap, a walk of those notes left over a
+  gigabyte of handles waiting. That is why the walker is a worker of its own, with nothing else in it.
+  What it can't help: listing a folder makes a handle for every entry at once, so a single folder of
+  80,000 notes still costs most of a gigabyte for a moment.
+- Looking a note up twice, once for its size and time and again to read it. Reading it from the `File`
+  the walk already has takes about a third off the file access of a first scan.
 - An object per link, in several lookup sets. A vault has ten or more links per note.
 - Strings read back from IndexedDB. Each is its own copy; `intern()` them when loading.
 - Arrays filled with `push()` and kept for good. They hold spare room; `slice()` them once filled.

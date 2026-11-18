@@ -4,6 +4,10 @@
 
 - A page with thousands of vault notes to list (one named like a common tag, for example) no longer
   holds Roam up while they are all drawn. The first notes are drawn, and the rest as the page is scrolled.
+- Scanning a large vault uses much less memory at its peak, on Rescan most of all. The files are walked
+  and read in a helper that exists only for the scan, so the file handles a scan makes are given back as
+  it goes instead of piling up next to the index.
+- A first scan is faster: each note is looked up on disk once instead of twice.
 
 ## 0.1.1 (2026-11-17)
 

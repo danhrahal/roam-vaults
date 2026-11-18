@@ -82,13 +82,15 @@ const timeStatus = (button, ready, row, timeout) => evalIn(async ([button, ready
   const b = [...(scope?.querySelectorAll('button') ?? [])].find((b) => b.innerText.trim() === button);
   if (!b) throw new Error(`no "${button}" button`);
   let left = false;
+  const seen = [status()];
   const t0 = performance.now();
   const end = new Promise((res) => {
-    const look = () => { const s = status(); if (s !== ready) left = true; else if (left) { mo.disconnect(); res(performance.now() - t0); } };
+    const look = () => { const s = status(); if (s !== seen.at(-1)) seen.push(s); if (s !== ready) left = true; else if (left) { mo.disconnect(); res(performance.now() - t0); } };
     const mo = new MutationObserver(look);
-    mo.observe(document.querySelector('.rv-settings') ?? document.body, { childList: true, subtree: true, characterData: true });
+    // the list is drawn again on every change, so watch the element it's drawn into
+    mo.observe(document.querySelector('.rv-settings')?.parentElement ?? document.body, { childList: true, subtree: true, characterData: true });
     // a status that never changes means the button did nothing (or the change was too quick to draw)
-    setTimeout(() => { if (!left) { mo.disconnect(); res(-1); } }, 10000);
+    setTimeout(() => { if (!left) { mo.disconnect(); res(`status stayed: ${seen.join(' > ')}`); } }, 10000);
     setTimeout(() => { mo.disconnect(); res(null); }, timeout);
     queueMicrotask(look);
   });
@@ -98,30 +100,34 @@ const timeStatus = (button, ready, row, timeout) => evalIn(async ([button, ready
 
 /** Opens the Roam page `title` and returns { total, fill, head }: ms from opening it to the vault
  *  panel for that title being filled, ms from the panel getting that title to being filled, and the
- *  panel's heading. */
+ *  panel's heading. Watched every frame: the panel counts as filled once it carries the title and a
+ *  heading element that wasn't there before the page was opened. On a timeout, `diag` says what the
+ *  page showed instead. */
 const timePage = (title) => evalIn(async (title) => {
+  const panel = () => document.querySelector('.roam-article .rv-panel');
+  const before = panel()?.querySelector('.rv-sec-head') ?? null;
   const t0 = performance.now();
-  let tagged = null;
-  const done = new Promise((res) => {
-    const mo = new MutationObserver((records) => {
-      for (const r of records) {
-        const el = r.target;
-        if (!(el instanceof HTMLElement) || !el.classList?.contains('rv-panel')) {
-          if (tagged === null) { const p = document.querySelector('.roam-article .rv-panel'); if (p?.dataset.title === title) tagged = performance.now(); }
-          continue;
-        }
-        if (el.dataset.title !== title) continue;
-        if (tagged === null) tagged = performance.now();
-        if (r.type === 'childList' && el.querySelector('.rv-sec-head')) { mo.disconnect(); return res(performance.now()); }
-      }
-    });
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-title'] });
-    setTimeout(() => { mo.disconnect(); res(null); }, 30000);
-  });
-  await window.roamAlphaAPI.ui.mainWindow.openPage({ page: { title } });
-  const t1 = await done;
-  const head = document.querySelector('.roam-article .rv-panel .rv-sec-head strong')?.textContent ?? '';
-  return { total: t1 === null ? null : t1 - t0, fill: t1 === null || tagged === null ? null : t1 - tagged, head };
+  let tagged = null, t1 = null;
+  const opened = window.roamAlphaAPI.ui.mainWindow.openPage({ page: { title } });
+  while (performance.now() - t0 < 15000) {
+    const p = panel();
+    if (p?.dataset.title === title) {
+      if (tagged === null) tagged = performance.now();
+      const h = p.querySelector('.rv-sec-head');
+      if (h && h !== before) { t1 = performance.now(); break; }
+    }
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  await opened;
+  const p = panel();
+  const head = p?.querySelector('.rv-sec-head strong')?.textContent ?? '';
+  const diag = t1 !== null ? null : {
+    page: document.querySelector('.roam-article .rm-title-display')?.textContent.trim() ?? null,
+    refs: document.querySelectorAll('.roam-article .rm-reference-main').length,
+    panels: [...document.querySelectorAll('.rv-panel')].map((x) => `${x.dataset.title}: ${x.childElementCount} children, "${x.querySelector('.rv-sec-head strong')?.textContent ?? ''}"`),
+    hidden: document.hidden,
+  };
+  return { total: t1 === null ? null : t1 - t0, fill: t1 === null || tagged === null ? null : t1 - tagged, head, diag };
 }, title);
 
 // ---------- results ----------
@@ -132,7 +138,7 @@ const METRICS = [
   ['scanS', 'First scan (s)'],
   ['scanPeakMB', 'First scan, memory peak (MB over baseline)'],
   ['settledMB', 'Settled after the first scan (MB over baseline)'],
-  ['workerHeapMB', 'Worker heap after a collection (MB)'],
+  ['workerHeapMB', 'Worker heap after a collection, after the later start (MB)'],
   ['pageMedianMs', 'Page open to vault panel, median (ms)'],
   ['pageP95Ms', 'Page open to vault panel, p95 (ms)'],
   ['fillMedianMs', 'Vault panel lookup and render, median (ms)'],
@@ -217,7 +223,6 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   const settled = await sampleFor(`${size}/${build.label}/settle`, 45000, 30000);
   m.scanPeakMB = Math.max(scanMem.peak, settled.peak) - base;
   m.settledMB = settled.mean - base;
-  m.workerHeapMB = await workerHeapMB().catch(() => null);
   await shot(`${size}-${build.file}-settings`);
   await dismissDialogs();
 
@@ -226,7 +231,7 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   for (const t of titles) {
     const x = await timePage(t);
     totals.push(x.total); fills.push(x.fill);
-    if (x.total === null) r.errors.push(`no vault panel within 30 s on "${t}"`);
+    if (x.total === null) { r.errors.push(`no vault panel within 15 s on "${t}"`); log('no panel on', t, JSON.stringify(x.diag)); }
     await sleep(300);
   }
   log(`pages: ${totals.map((x) => x == null ? '–' : Math.round(x)).join(' ')}`);
@@ -241,7 +246,7 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   const ms = await timeStatus('Rescan', ready, false, scanTimeout);
   const rescanMem = await s2.stop();
   if (ms === null) throw new Error('Rescan did not finish');
-  if (ms < 0) throw new Error('Rescan did not change the vault\'s status within 10 s');
+  if (typeof ms === 'string') throw new Error(`Rescan did not change the vault's status within 10 s (${ms})`);
   m.rescanS = ms / 1000;
   m.rescanPeakMB = rescanMem.peak - base;
   log(`rescan ${m.rescanS.toFixed(1)} s`);
@@ -264,6 +269,8 @@ async function profileBuild(size, vault, gen, titles, build, r) {
   const settled2 = await sampleFor(`${size}/${build.label}/start-settle`, 30000, 15000);
   m.startPeakMB = Math.max(startMem.peak, settled2.peak) - base;
   m.startSettledMB = settled2.mean - base;
+  // last, so attaching to the worker can't touch the other numbers
+  m.workerHeapMB = await workerHeapMB().catch(() => null);
 }
 
 async function main() {

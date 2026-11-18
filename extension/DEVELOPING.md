@@ -100,6 +100,9 @@ profile.json, the memory log and screenshots). All builds of a job run one after
 runner, each in a freshly started Roam with none of the extension's state, so compare columns of one
 run rather than numbers across runs. The pages it opens are created in the test graph if missing.
 
+How long a job takes, per build: about 3 minutes at 10,000 notes, 5 at 100,000 and 25 at 1,000,000 (a
+million notes is 3.4 GB on disk; the job frees space on the runner first and may run for up to 6 hours).
+
 To run it by hand, as for the run above:
 `DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… SIZES=10000 BUILDS=a=/path/to/dist,b=/other/dist node test/real-roam/profile.mjs`.
 `node test/real-roam/genvault.mjs <notes> <folder>` writes just the vault.

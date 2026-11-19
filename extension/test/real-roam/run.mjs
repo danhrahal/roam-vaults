@@ -108,14 +108,18 @@ async function countsMatchRoam(title, vaultLabel = null) {
   const roamLinked = await evalIn(() => +(document.querySelector('.roam-article .rm-reference-container > .flex-h-box strong')?.textContent.match(/^\s*(\d+)/)?.[1] ?? 0));
   check(`${title}: linked count matches Roam's`, countOf(line, 'Linked') === roamLinked, `${countOf(line, 'Linked')} vs ${roamLinked}`);
   // Roam counts unlinked references when the section is opened: open it and compare
-  // (the caret opens it: a click elsewhere on the header row does nothing)
-  await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box .rm-caret')?.click());
+  // A real mouse click on its caret opens it (a script click on the header row does nothing)
+  const caret = roam.page.locator('.roam-article .rm-unlinked-reference-container > .flex-h-box .rm-caret').first();
+  await roam.page.locator('.roam-article .rm-unlinked-reference-container > .flex-h-box').first().hover().catch(() => {});
+  await caret.click({ force: true }).catch((e) => log('unlinked caret click failed:', e.message));
   const roamUnlinked = await waitFor('Roam to count unlinked references', () => evalIn(() => {
     const m = document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box strong')?.textContent.match(/^\s*(\d+)/);
     return m ? +m[1] : false; // Roam writes "0 Unlinked References" when there are none
   }), 15000).catch(() => null);
+  const unlinkedHtml = roamUnlinked === null ? await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container')?.outerHTML.slice(0, 400) ?? 'no unlinked section') : '';
+  if (unlinkedHtml) log('unlinked section:', unlinkedHtml);
   check(`${title}: unlinked count matches Roam's`, roamUnlinked !== null && countOf(line, 'Unlinked') === roamUnlinked, `${countOf(line, 'Unlinked')} vs ${roamUnlinked}`);
-  await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box .rm-caret')?.click()); // fold it again
+  if (roamUnlinked !== null) await caret.click({ force: true }).catch(() => {}); // fold it again
   if (vaultLabel) {
     await evalIn((sel) => [...document.querySelectorAll(`${sel} strong`)].find((e) => e.textContent.includes('External'))?.click(), sel);
     await sleep(1500);

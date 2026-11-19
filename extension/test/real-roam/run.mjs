@@ -114,8 +114,8 @@ async function countsMatchRoam(title, vaultLabel = null) {
   await caret.click({ force: true }).catch((e) => log('unlinked caret click failed:', e.message));
   const roamUnlinked = await waitFor('Roam to count unlinked references', () => evalIn(() => {
     const m = document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box strong')?.textContent.match(/^\s*(\d+)/);
-    return m ? +m[1] : false; // Roam writes "0 Unlinked References" when there are none
-  }), 15000).catch(() => null);
+    return m ? { n: +m[1] } : false; // Roam writes "0 Unlinked References" when there are none; wrapped, as waitFor takes 0 for "not yet"
+  }), 15000).then((r) => r.n, () => null);
   const unlinkedHtml = roamUnlinked === null ? await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container')?.outerHTML.slice(0, 400) ?? 'no unlinked section') : '';
   if (unlinkedHtml) log('unlinked section:', unlinkedHtml);
   check(`${title}: unlinked count matches Roam's`, roamUnlinked !== null && countOf(line, 'Unlinked') === roamUnlinked, `${countOf(line, 'Unlinked')} vs ${roamUnlinked}`);

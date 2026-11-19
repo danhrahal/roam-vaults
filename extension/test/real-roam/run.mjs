@@ -108,13 +108,14 @@ async function countsMatchRoam(title, vaultLabel = null) {
   const roamLinked = await evalIn(() => +(document.querySelector('.roam-article .rm-reference-container > .flex-h-box strong')?.textContent.match(/^\s*(\d+)/)?.[1] ?? 0));
   check(`${title}: linked count matches Roam's`, countOf(line, 'Linked') === roamLinked, `${countOf(line, 'Linked')} vs ${roamLinked}`);
   // Roam counts unlinked references when the section is opened: open it and compare
-  await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box')?.click());
+  // (the caret opens it: a click elsewhere on the header row does nothing)
+  await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box .rm-caret')?.click());
   const roamUnlinked = await waitFor('Roam to count unlinked references', () => evalIn(() => {
     const m = document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box strong')?.textContent.match(/^\s*(\d+)/);
-    return m ? +m[1] : (document.querySelector('.roam-article .rm-unlinked-reference-container .rm-mentions') ? 0 : false);
+    return m ? +m[1] : false; // Roam writes "0 Unlinked References" when there are none
   }), 15000).catch(() => null);
   check(`${title}: unlinked count matches Roam's`, roamUnlinked !== null && countOf(line, 'Unlinked') === roamUnlinked, `${countOf(line, 'Unlinked')} vs ${roamUnlinked}`);
-  await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box')?.click()); // fold it again
+  await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box .rm-caret')?.click()); // fold it again
   if (vaultLabel) {
     await evalIn((sel) => [...document.querySelectorAll(`${sel} strong`)].find((e) => e.textContent.includes('External'))?.click(), sel);
     await sleep(1500);

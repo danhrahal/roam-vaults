@@ -118,6 +118,9 @@ ok('panel sits below Linked References', await p.evaluate(() =>
 
 // counts under the title: Roam's wording, linked then unlinked then vault, each jumping to its section
 const counts = () => p.evaluate(() => [...document.querySelectorAll('.rv-counts strong')].map((e) => e.textContent));
+ok('counts are off by default', !(await p.locator('.rv-counts').count()) && !(await p.evaluate(() => window.__unlinkedAsked)));
+ok('settings has a Reference counts switch', await p.evaluate(() => window.__settings.settings.some((s) => s.id === 'reference-counts' && s.action.type === 'switch')));
+await p.evaluate(() => window.__settings.settings.find((s) => s.id === 'reference-counts').action.onChange({ target: { checked: true } }));
 await p.waitForFunction(() => document.querySelectorAll('.rv-counts strong').length === 3, null, { timeout: 3000 }).catch(() => {});
 ok('counts line under the title reads linked, unlinked, external', JSON.stringify(await counts()) === JSON.stringify(['1 Linked References', '3 Unlinked References', '4 External Vault References']));
 ok('counts line sits right below the title', await p.evaluate(() => document.querySelector('.rm-title-display-container').nextElementSibling?.classList.contains('rv-counts')));
@@ -209,6 +212,8 @@ ok('the vault count follows the panel', await p.waitForFunction(() => document.q
 await p.evaluate(() => { window.roamAlphaAPI.pull = () => ({ ':node/title': 'Nothing Mentions This' }); window.dispatchEvent(new HashChangeEvent('hashchange')); });
 ok('page with no matches shows nothing', await p.waitForFunction(() => { const e = document.querySelector('.rv-panel'); return e && e.dataset.title === 'Nothing Mentions This' && !e.textContent.trim() && getComputedStyle(e).display === 'none'; }, null, { timeout: 3000 }).then(() => true, () => false));
 ok('counts of zero are left out', await p.waitForFunction(() => document.querySelector('.rv-counts')?.textContent === '1 Linked References', null, { timeout: 3000 }).then(() => true, () => false));
+await p.evaluate(() => window.__settings.settings.find((s) => s.id === 'reference-counts').action.onChange({ target: { checked: false } }));
+ok('turning the switch off removes the counts line', await p.waitForFunction(() => !document.querySelector('.rv-counts'), null, { timeout: 3000 }).then(() => true, () => false));
 
 await p.evaluate(() => window.__ext.onunload());
 ok('unload removes everything', (await p.locator('[data-roam-vaults]').count()) === 0);

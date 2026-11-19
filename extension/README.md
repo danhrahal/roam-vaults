@@ -12,9 +12,6 @@ Vaults adds an **External Vault References** section to every Roam page. It sits
 Unlinked References and looks like them. It lists the notes in your Obsidian-style vaults, meaning local
 folders of Markdown notes, that are about the page you're on or link to it.
 
-Under the page title, one line shows how many Linked, Unlinked and External Vault References the page has,
-so you can see what's further down without scrolling. Click a count to jump to that section.
-
 It only reads your vault. Nothing from the vault is written to your Roam graph, and nothing is sent over the
 network.
 
@@ -78,8 +75,7 @@ second.
 3. Click **Add vault folder**, choose your vault folder, and allow access when asked.
 
 Matching notes then show up below Linked References, as **"External Vault References"**. The
-section appears only on pages that have matching vault notes. The line of counts under the title leaves out
-any count of zero. The first
+section appears only on pages that have matching vault notes. Other pages look exactly as before. The first
 scan of a large vault takes a few seconds. After that, only changed files are read again.
 
 Choose the vault folder itself, such as `Documents/My Vault`, not a folder above it like `Documents` or
@@ -99,8 +95,20 @@ Everything is in **Settings → Roam Depot → Vaults**:
 - **"Last scan didn't finish"** means Roam crashed while reading that vault. It isn't read again until
   you click **Rescan** in its row (see [Troubleshooting](#troubleshooting)).
 - **Rescan** reads every vault again, except one whose last scan didn't finish. Only changed files are parsed.
+- **Reference counts** turns on the line of counts under each page title (see below). It's off until you turn it on.
 
 Vaults adds no commands to the command palette.
+
+### Reference counts
+
+On a page with a lot of references, the vault notes are far down. Turn on **Reference counts** in
+**Settings → Roam Depot → Vaults** to see, under each page title, how many Linked, Unlinked and External Vault
+References the page has. Click a count to jump to that section.
+
+![Reference counts under a page title: 15 Linked References, 191 Unlinked References, 3 External Vault References](https://raw.githubusercontent.com/sweenzor/roam-vaults/49ac8d0dc199e975fc3474fc95013113f6898dd4/docs/images/reference-counts.png)
+
+A count of zero is left out. Unlinked references are counted the way Roam counts them when you open that
+section: blocks that mention the page's title without linking to it.
 
 ## Troubleshooting
 

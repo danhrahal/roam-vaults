@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- A line under the page title shows how many Linked, Unlinked and External Vault References the page
+- **Reference counts**, a new switch in Settings → Roam Depot → Vaults, off until you turn it on. It adds
+  a line under the page title that shows how many Linked, Unlinked and External Vault References the page
   has, in that order, so you can see what's further down without scrolling. Click a count to jump to that
   section. Counts of zero are left out, and nothing shows while no vault is connected.
 - A page with thousands of vault notes to list (one named like a common tag, for example) no longer

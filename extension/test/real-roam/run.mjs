@@ -19,7 +19,7 @@ import { genVault } from './genvault.mjs';
 import {
   roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, shot, signIn, openGraph,
   dismissDialogs, openPage, openSettings, clickLeaf, loadDevExtension, vaultRows, statusOf, clickButton, addVault,
-  clearExtensionState, scanMarked, touchAll, panelText,
+  clearExtensionState, scanMarked, touchAll, panelText, setSwitch,
 } from './roam.mjs';
 
 const EMAIL = process.env.ROAM_EMAIL, PASSWORD = process.env.ROAM_PASSWORD;
@@ -178,9 +178,21 @@ async function main() {
   const unfolded = await waitFor('the counterpart note to unfold', () => evalIn(() => document.querySelector('.roam-article .rv-preview')?.innerText.includes('The note for this page')), 5000).catch(() => false);
   check('Unfolding a note shows it inline', unfolded);
   await shot('page-external-vault-references');
+  // the counts line is off until the Reference counts switch is turned on
+  check('Reference counts switch turns off (an earlier run may have left it on)', (await setSwitch('Reference counts', false)) === false);
+  await openPage(TEST_PAGE);
+  await sleep(3000);
+  check('No counts line while Reference counts is off', await evalIn(() => !document.querySelector('.rv-counts')));
+  await shot('counts-off');
+  check('Reference counts switch turns on', (await setSwitch('Reference counts', true)) === true);
   await countsMatchRoam(TEST_PAGE, '3 External Vault References');
   // a page of the test graph with references of its own, when it has one
   if (await evalIn((t) => !!window.roamAlphaAPI.q('[:find ?p . :in $ ?t :where [?p :node/title ?t]]', t), 'Kernel meeting protocol')) await countsMatchRoam('Kernel meeting protocol');
+  // settings sync through the graph, so leave the switch off for the next run
+  check('Reference counts switch turns off again', (await setSwitch('Reference counts', false)) === false);
+  await openPage(TEST_PAGE);
+  await sleep(2000);
+  check('Turning Reference counts off removes the line', await evalIn(() => !document.querySelector('.rv-counts')));
   await openPage(TEST_PAGE);
   fs.writeFileSync(path.join(small, 'Fresh CI note.md'), `Written while Roam was open, links [[${TEST_PAGE}]].\n`);
   const live = await waitFor('the new note to appear', async () => (await panelText()).includes('Fresh CI note'), 15000).then(() => true, () => false);

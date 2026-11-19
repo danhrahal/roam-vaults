@@ -4,7 +4,7 @@ import { loadVaults, saveVaults } from './store.ts';
 import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
-import { createSettingsPanel, type SettingsVault } from './settings.ts';
+import { createSettingsPanel, COUNTS_SETTING, type SettingsVault } from './settings.ts';
 import { ATTR, installStyles, renderPanel, renderCounts, h, type Count, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult } from '../engine.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
@@ -259,8 +259,18 @@ async function countUnlinked(title: string) {
   } catch (e) { console.warn('[roam-vaults] unlinked count failed', e); }
 }
 
+/** The counts line is off unless the "Reference counts" setting is on. */
+let showCounts = false;
+function setShowCounts(on: boolean) {
+  if (on === showCounts) return;
+  showCounts = on;
+  if (!on) document.querySelectorAll(`.rv-counts[${ATTR}]`).forEach((n) => n.remove());
+  syncAllCounts();
+}
+
 function jumpTo(el: Element | null | undefined) { el?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
 function syncCounts(refs: HTMLElement, panel: HTMLElement) {
+  if (!showCounts) return;
   const box = titleBox(scopeOf(refs));
   if (!box) return;
   let line = box.nextElementSibling as HTMLElement | null;
@@ -269,6 +279,7 @@ function syncCounts(refs: HTMLElement, panel: HTMLElement) {
     box.after(line);
   }
   const title = panel.dataset.title ?? '';
+  if (!unlinked.has(title)) countUnlinked(title);
   // The jumps look the sections up when clicked: Roam may have drawn them again since.
   const here = () => { const s = scopeOf(line!); return s?.querySelector<HTMLElement>('.rm-reference-main') ?? null; };
   const counts: Count[] = [];
@@ -303,7 +314,6 @@ async function inject() {
       let panel = parent.querySelector<HTMLElement>(`:scope > .rv-panel[${ATTR}]`);
       if (panel && panel.dataset.title === title) { syncCounts(refs, panel); continue; }
       unlinked.delete(title); // a page visit: its unlinked count is worked out afresh
-      countUnlinked(title);
       if (!panel) {
         panel = document.createElement('div');
         panel.setAttribute(ATTR, 'panel');
@@ -327,6 +337,7 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
   const load = ++loads;
   cleanups.push(installStyles());
   settingsAPI = extensionAPI?.settings;
+  try { showCounts = settingsAPI?.get?.(COUNTS_SETTING) === true; } catch { showCounts = false; }
   workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
 
   // No command palette entries (so no hotkeys either): vaults are managed in the settings panel.
@@ -334,6 +345,7 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
     vaults: () => vaults.map(settingsVault),
     add: addVault,
     rescan: () => vaults.forEach((v) => v.rescan()),
+    countsChanged: setShowCounts,
     subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
   });
   cleanups.push(() => listeners.clear());
@@ -363,6 +375,7 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
 
 function onunload() {
   loads++;
+  showCounts = false;
   cleanups.splice(0).forEach((f) => f());
   vaults.forEach((v) => v.stop()); vaults = [];
   URL.revokeObjectURL(workerUrl);

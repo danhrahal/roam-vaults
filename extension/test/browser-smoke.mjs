@@ -224,6 +224,21 @@ ok('counts of zero are left out', await p.waitForFunction(() => document.querySe
 await p.evaluate(() => window.__settings.settings.find((s) => s.id === 'reference-counts').action.onChange({ target: { checked: false } }));
 ok('turning the switch off removes the counts line', await p.waitForFunction(() => !document.querySelector('.rv-counts'), null, { timeout: 3000 }).then(() => true, () => false));
 
+// a folder named like the page: listed folded, with the files under it; a note in it opens the viewer
+await p.evaluate(() => { window.roamAlphaAPI.pull = () => ({ ':node/title': 'Q4' }); window.dispatchEvent(new HashChangeEvent('hashchange')); });
+const folderShown = await p.waitForFunction(() => document.querySelector('.rv-panel')?.dataset.title === 'Q4' && document.querySelector('.rv-panel').textContent.includes('Q4/'), null, { timeout: 3000 }).then(() => true, () => false);
+ok('a folder named like the page is listed, folded, with its file count', folderShown
+  && (await p.locator('.rv-note').first().textContent()) === 'R\u00e9sum\u00e9s/2026/Q4/'
+  && (await p.locator('.rv-count').first().textContent()) === '1'
+  && await p.locator('.rv-group').first().locator('.rv-content').evaluate((e) => e.hidden));
+await p.locator('.rv-group-caret').first().click();
+ok('unfolding the folder lists its notes', (await p.locator('.rv-file .rv-file-name').first().textContent()) === 'Caf\u00e9 plan');
+await p.locator('.rv-file').first().click();
+await p.waitForSelector('.rv-viewer');
+ok('a note in the folder opens in the viewer', (await p.locator('.rv-viewer h3').textContent()) === 'Caf\u00e9 plan');
+if (process.argv[2]) await p.screenshot({ path: process.argv[2].replace(/\.png$/, '-folder.png') });
+await p.keyboard.press('Escape');
+
 await p.evaluate(() => window.__ext.onunload());
 ok('unload removes everything', (await p.locator('[data-roam-vaults]').count()) === 0);
 

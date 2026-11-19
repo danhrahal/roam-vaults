@@ -37,8 +37,11 @@ export interface Backlink {
   unread?: true;
 }
 export interface Tagged { path: string; title: string; tag: string }
+/** A folder named like the page, with the files under it as paths inside the folder. */
+export interface FolderMatch { path: string; files: string[]; total: number }
 export interface PageResult {
   title: string;
+  folders: FolderMatch[];
   counterparts: Counterpart[];
   backlinks: Backlink[];
   tagged: Tagged[];
@@ -71,6 +74,8 @@ const MAX_LINE = 240;
 const MAX_BACKLINK_NOTES = 200;
 /** Close-named notes shown under a page with no matching note. */
 const MAX_FUZZY = 5;
+const MAX_FOLDERS = 20;
+const MAX_FOLDER_FILES = 20_000;
 /** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
 const MAX_TEXT_CHARS = 1_000_000;
 const READS_AT_ONCE = 16;
@@ -382,7 +387,7 @@ export class VaultEngine {
     // Close names only for a page no note is: next to an exact match they would mostly be noise.
     const shown = new Set([...strong, ...srcs, ...tagged.map((t) => t.path)]);
     const fuzzy = counterparts.length ? [] : this.fuzzy(title, MAX_FUZZY).filter((f) => !shown.has(f.path));
-    return { title, counterparts, backlinks, tagged, fuzzy };
+    return { title, folders: this.folders(title), counterparts, backlinks, tagged, fuzzy };
   }
 
   /** Notes whose name or alias is close to a page title, best first. */
@@ -403,6 +408,17 @@ export class VaultEngine {
       }));
     }
     return out;
+  }
+
+  /** Folders named like the page, each with the files under it. */
+  private folders(title: string): FolderMatch[] {
+    // A folder inside one already listed (a copy kept in a subfolder, say) is shown by that one.
+    const dirs: string[] = [];
+    for (const d of this.idx.foldersNamed(title)) if (!dirs.some((top) => d.startsWith(top + '/'))) dirs.push(d);
+    return dirs.slice(0, MAX_FOLDERS).map((dir) => {
+      const all = this.idx.filesUnder(dir).map((p) => p.slice(dir.length + 1));
+      return { path: dir, total: all.length, files: all.slice(0, MAX_FOLDER_FILES) };
+    });
   }
 
   async read(path: string): Promise<string> { return this.fs.readText(path); }

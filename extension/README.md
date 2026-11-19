@@ -146,6 +146,7 @@ same folder path, the same daily-note date, a `[[link]]` or a `#tag`. Similar ti
 yet. Only `.md` files are read. If you just changed the note and it doesn't show yet, click **Rescan**.
 
 </details>
+
 ### Opening notes in another editor
 
 The viewer's button opens notes in Obsidian. To open them in another editor instead, fill in **Open notes

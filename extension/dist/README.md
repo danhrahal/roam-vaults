@@ -12,6 +12,9 @@ Vaults adds an **External Vault References** section to every Roam page. It sits
 Unlinked References and looks like them. It lists the notes in your Obsidian-style vaults, meaning local
 folders of Markdown notes, that are about the page you're on or link to it.
 
+Under the page title, one line shows how many Linked, Unlinked and External Vault References the page has,
+so you can see what's further down without scrolling. Click a count to jump to that section.
+
 It only reads your vault. Nothing from the vault is written to your Roam graph, and nothing is sent over the
 network.
 
@@ -75,7 +78,8 @@ second.
 3. Click **Add vault folder**, choose your vault folder, and allow access when asked.
 
 Matching notes then show up below Linked References, as **"External Vault References"**. The
-section appears only on pages that have matching vault notes. Other pages look exactly as before. The first
+section appears only on pages that have matching vault notes. The line of counts under the title leaves out
+any count of zero. The first
 scan of a large vault takes a few seconds. After that, only changed files are read again.
 
 Choose the vault folder itself, such as `Documents/My Vault`, not a folder above it like `Documents` or

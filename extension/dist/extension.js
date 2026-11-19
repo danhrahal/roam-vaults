@@ -345,6 +345,9 @@ function splitPipe(inner) {
 var ATTR = "data-roam-vaults";
 var STYLES = `
 .rv-panel{padding-top:12px;margin:0 -4px 0 -16px}
+.rv-counts{display:flex;flex-wrap:wrap;gap:4px 20px;margin:-20px 0 22px}
+.rv-counts:empty{display:none}
+.rv-counts strong{color:rgb(206,217,224);cursor:pointer}
 .rv-panel:empty{display:none}
 .rv-sec{margin-bottom:12px}
 .rv-sec-head{display:flex;align-items:center;height:24px;gap:2px;cursor:pointer;user-select:none}
@@ -453,7 +456,7 @@ function renderPanel(el, vaults2) {
   drawing.delete(el);
   if (!vaults2.length) {
     el.replaceChildren();
-    return;
+    return 0;
   }
   const ready = [];
   let n = 0;
@@ -465,7 +468,7 @@ function renderPanel(el, vaults2) {
   }
   if (!n) {
     el.replaceChildren();
-    return;
+    return 0;
   }
   const collapsed = isCollapsed();
   el.replaceChildren(h(
@@ -474,6 +477,13 @@ function renderPanel(el, vaults2) {
     sectionHead(`${n} External Vault References`, !collapsed),
     h("div", { class: "rv-sec-body" }, resultBody(el, ready, vaults2.length > 1))
   ));
+  return n;
+}
+function renderCounts(el, counts) {
+  const key = counts.map((c) => c.label).join("\n");
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.replaceChildren(...counts.map((c) => h("strong", { onclick: c.jump }, c.label)));
 }
 var ROWS_AT_ONCE = 60;
 var NEAR = "800px";
@@ -1140,10 +1150,81 @@ async function fill(panel) {
   const snapshot = vaults.slice();
   const states = await Promise.all(snapshot.map(async (v) => v.state.kind === "ready" ? { id: v.id, name: v.name, act: v.act, state: { ...v.state, result: await v.query(title) } } : v));
   if (fills.get(panel) !== seq || panel.dataset.title !== title || !panel.isConnected) return;
-  renderPanel(panel, states);
+  panel.dataset.count = String(renderPanel(panel, states));
+  const refs = panel.previousElementSibling;
+  if (refs instanceof HTMLElement && refs.matches(".rm-reference-main")) syncCounts(refs, panel);
 }
 function refreshAll() {
   document.querySelectorAll(`.rv-panel[${ATTR}]`).forEach(fill);
+}
+function titleBox(scope) {
+  const h1 = scope?.querySelector(".rm-title-display");
+  return h1 ? h1.closest(".rm-title-display-container") ?? h1 : null;
+}
+var scopeOf = (el) => el.closest(".roam-log-page") ?? el.closest(".roam-article");
+function roamHeader(refs, kind) {
+  const sel = kind === "Linked" ? ".rm-reference-container > .flex-h-box strong" : ".rm-unlinked-reference-container > .flex-h-box strong";
+  return refs.querySelector(sel);
+}
+var countIn = (el) => {
+  const m = el?.textContent?.match(/^\s*(\d+)\s/);
+  return m ? +m[1] : 0;
+};
+var unlinked = /* @__PURE__ */ new Map();
+var UNLINKED_KEPT = 50;
+async function countUnlinked(title) {
+  if (unlinked.has(title)) return;
+  unlinked.set(title, null);
+  if (unlinked.size > UNLINKED_KEPT) unlinked.delete(unlinked.keys().next().value);
+  const api = window.roamAlphaAPI;
+  const q = api?.data?.async?.q ?? api?.q;
+  if (!q) return;
+  const pattern = "(?i)" + title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  try {
+    const n = await q.call(
+      api?.data?.async?.q ? api.data.async : api,
+      "[:find (count ?b) . :in $ ?pat ?t :where [?p :node/title ?t] [(re-pattern ?pat) ?re] [?b :block/string ?s] [(re-find ?re ?s)] (not [?b :block/refs ?p])]",
+      pattern,
+      title
+    );
+    if (!unlinked.has(title)) return;
+    unlinked.set(title, typeof n === "number" ? n : 0);
+    syncAllCounts();
+  } catch (e) {
+    console.warn("[roam-vaults] unlinked count failed", e);
+  }
+}
+function jumpTo(el) {
+  el?.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+function syncCounts(refs, panel) {
+  const box = titleBox(scopeOf(refs));
+  if (!box) return;
+  let line = box.nextElementSibling;
+  if (!line?.matches(`.rv-counts[${ATTR}]`)) {
+    line = h("div", { class: "rv-counts", [ATTR]: "counts" });
+    box.after(line);
+  }
+  const title = panel.dataset.title ?? "";
+  const here = () => {
+    const s = scopeOf(line);
+    return s?.querySelector(".rm-reference-main") ?? null;
+  };
+  const counts = [];
+  const linked = roamHeader(refs, "Linked");
+  if (countIn(linked)) counts.push({ label: linked.textContent.trim(), jump: () => jumpTo(roamHeader(here() ?? refs, "Linked")?.closest(".flex-h-box")) });
+  const own = roamHeader(refs, "Unlinked");
+  const u = countIn(own) || (unlinked.get(title) ?? 0);
+  if (u) counts.push({ label: `${u} Unlinked References`, jump: () => jumpTo(roamHeader(here() ?? refs, "Unlinked")?.closest(".flex-h-box")) });
+  const ext = Number(panel.dataset.count ?? 0);
+  if (ext) counts.push({ label: `${ext} External Vault References`, jump: () => jumpTo(here()?.parentElement?.querySelector(`:scope > .rv-panel[${ATTR}]`) ?? panel) });
+  renderCounts(line, counts);
+}
+function syncAllCounts() {
+  document.querySelectorAll(`.rv-panel[${ATTR}]`).forEach((panel) => {
+    const refs = panel.previousElementSibling;
+    if (refs instanceof HTMLElement && refs.matches(".rm-reference-main")) syncCounts(refs, panel);
+  });
 }
 var scanning = false;
 var scanAgain = false;
@@ -1162,7 +1243,12 @@ async function inject() {
       const title = await titleFor(refs);
       if (!title) continue;
       let panel = parent.querySelector(`:scope > .rv-panel[${ATTR}]`);
-      if (panel && panel.dataset.title === title) continue;
+      if (panel && panel.dataset.title === title) {
+        syncCounts(refs, panel);
+        continue;
+      }
+      unlinked.delete(title);
+      countUnlinked(title);
       if (!panel) {
         panel = document.createElement("div");
         panel.setAttribute(ATTR, "panel");
@@ -1170,6 +1256,8 @@ async function inject() {
         parent.insertBefore(panel, refs.nextSibling);
       }
       panel.dataset.title = title;
+      panel.dataset.count = "0";
+      syncCounts(refs, panel);
       fill(panel);
     }
   } finally {

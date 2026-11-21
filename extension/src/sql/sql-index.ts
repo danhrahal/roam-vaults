@@ -31,9 +31,17 @@ export class SqlIndex extends VaultIndex {
    */
   override bulk(on: boolean) {
     this.flush();
-    for (const [name, cols] of LOOKUP_INDEXES) this.db.exec(on ? `DROP INDEX IF EXISTS ${name}` : `CREATE INDEX IF NOT EXISTS ${name} ON ${cols}`);
     this.db.exec(`PRAGMA cache_size = ${on ? -BULK_CACHE_KB : -CACHE_KB}`);
-    if (!on) this.db.exec('PRAGMA shrink_memory');
+    if (on) for (const [name] of LOOKUP_INDEXES) this.db.exec(`DROP INDEX IF EXISTS ${name}`);
+    else {
+      // Making an index sorts its rows. In memory that takes as much room as the index, from a
+      // WebAssembly heap that never gives room back: through temporary files (in the pool, for a
+      // database on disk) the sort holds no more than the page cache does.
+      const make = () => { for (const [name, cols] of LOOKUP_INDEXES) this.db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${cols}`); };
+      try { this.db.exec('PRAGMA temp_store = FILE'); make(); }
+      catch { this.db.exec('PRAGMA temp_store = MEMORY'); make(); } // no room for a temporary file
+      finally { this.db.exec('PRAGMA temp_store = MEMORY; PRAGMA shrink_memory'); }
+    }
   }
 
   // ---------- statements ----------
@@ -142,6 +150,7 @@ export class SqlIndex extends VaultIndex {
   }
   /** Counted once and kept up from there: a scan asks after every batch. */
   private count = -1;
+  override isEmpty(): boolean { return !this.one('SELECT 1 FROM files LIMIT 1'); }
   override noteCount(): number { return this.count < 0 ? this.count = this.one('SELECT count(*) FROM notes')![0] : this.count; }
   override filePaths(): string[] { return this.col('SELECT path FROM files'); }
   override pathsIn(folder: string): string[] {

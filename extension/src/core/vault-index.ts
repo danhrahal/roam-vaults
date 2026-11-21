@@ -227,6 +227,8 @@ export class VaultIndex {
   /** A note's file size and time when it was read, if it is in the index. */
   stampOf(path: string): Stamp | undefined { return this.notes.get(path); }
   noteCount(): number { return this.notes.size; }
+  /** Does the index hold no file at all? */
+  isEmpty(): boolean { return !this.files.size; }
   /** Every path in the vault, notes and attachments. */
   filePaths(): string[] { return [...this.files.keys()]; }
   notePaths(): Iterable<string> { return this.notes.keys(); }

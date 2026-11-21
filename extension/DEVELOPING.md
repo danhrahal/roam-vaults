@@ -99,7 +99,9 @@ backlog); its code is in commit 1b8305b.
   pages at a start only once a scan has finished into it (`scanned`).
 - A scan into an empty database (a first scan) runs without the three indexes only lookups need and with a
   larger page cache, and makes the indexes at the end (`SqlIndex.bulk`): at 100,000 notes that took a first
-  scan from 37 s to 28 s in the memory benchmark, against 22 s for the in-memory index.
+  scan from 37 s to 24 s in the memory benchmark, against 22 s for the in-memory index. The indexes are
+  sorted through temporary files in the pool (`temp_store = FILE` while they are made), not in memory: a
+  WebAssembly heap never gives memory back, and the sort took as much of it as the indexes are large.
 
 ## Real Roam run (GitHub Actions)
 

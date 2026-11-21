@@ -41,6 +41,8 @@ export async function openDb(key: string, wasm?: WebAssembly.Module): Promise<Op
           name, directory: `${SQL_DIR}/${name}`, initialCapacity: 4,
           preserveOnInitFailure: true, forceReinitIfPreviouslyFailed: true,
         });
+        // The database, its journal, and the temporary files an index is sorted through.
+        await pool.reserveMinimumCapacity(6);
         db = new pool.OpfsSAHPoolDb('/index.db');
         persistent = true;
       } catch (e) { why = (e as Error).message; }

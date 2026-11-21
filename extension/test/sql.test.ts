@@ -162,3 +162,69 @@ test('the daily format can change between scans', async () => {
   await b.build();
   assert.deepEqual((await b.query('November 9th, 2026')).counterparts.map((c) => c.path), ['J/09-11-2026.md']);
 });
+
+test('a later start answers from the database before any file is looked at', async () => {
+  const { files } = gen(200, 5);
+  const fs = memFS(files);
+  const { db } = await openDb('start');
+  const idx = new SqlIndex(db);
+  assert.equal(idx.scanned, false);
+  const first = new VaultEngine(fs, undefined, idx);
+  await first.build();
+  idx.markScanned();
+  const titles = titlesOf(files, DAYS);
+  const before = await shows(first, titles);
+  first.matcher.detach();
+  // The next session: the same database, a new engine.
+  const reads = fs.reads();
+  const again = new SqlIndex(db);
+  assert.equal(again.scanned, true);
+  const next = new VaultEngine(fs, undefined, again);
+  const texts = fs.reads();
+  assert.deepEqual(await shows(next, titles), before);
+  assert.equal(texts, reads, 'starting reads no file');
+  // Its scan changes only what differs on disk, and saves nothing elsewhere.
+  const paths = Object.keys(files).filter((p) => p.endsWith('.md'));
+  fs.write(paths[1], 'now links [[alpha beta]]');
+  fs.write('New/fresh.md', '[[' + paths[2].replace(/\.md$/, '') + ']]');
+  fs.write('New/pic two.png', '');
+  fs.rm(paths[4]); fs.rm('A/pic.png');
+  const stats = await next.check();
+  assert.deepEqual([stats.reread, stats.changed, stats.notes], [2, true, paths.length]);
+  assert.equal(next.unsaved.size, 0);
+  const fresh = new VaultEngine(fs); await fresh.build();
+  await same(fresh, next, [...titles, 'fresh']);
+  const none = await next.check();
+  assert.deepEqual([none.reread, none.changed], [0, false]);
+});
+
+test('a scan handed over in batches fills the database like one in memory, and drops a note that can no longer be read', async () => {
+  const { files } = gen(300, 9);
+  const mfs = memFS(files);
+  let unreadable = '';
+  // Three batches in hand at once, as the walker gives them.
+  const fs: VaultFS = {
+    ...mfs,
+    async scan(each) {
+      const all = await mfs.list();
+      const batches: FileMeta[][] = [];
+      for (let i = 0; i < all.length; i += 40) batches.push(all.slice(i, i + 40));
+      for (let i = 0; i < batches.length; i += 3) {
+        await Promise.all(batches.slice(i, i + 3).map((b) => each(b, async (want) =>
+          Promise.all(want.map((k) => b[k].path === unreadable ? null : mfs.readText(b[k].path))))));
+      }
+    },
+  };
+  const { mem, sql } = await both(fs);
+  const titles = titlesOf(files, DAYS);
+  await same(mem, sql, titles);
+  assert.deepEqual(sql.idx.pathsIn('A').sort(), mem.idx.pathsIn('A').sort());
+  assert.deepEqual(sql.idx.pathsIn('Deep/Er').sort(), mem.idx.pathsIn('Deep/Er').sort());
+  unreadable = Object.keys(files)[6];
+  mfs.write(unreadable, 'changed');
+  const stats = await sql.check();
+  assert.equal(stats.errors.length, 1);
+  assert.ok(!sql.idx.hasFile(unreadable));
+  const fresh = new VaultEngine(fs); await fresh.build();
+  await same(fresh, sql, titles);
+});

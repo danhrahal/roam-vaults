@@ -2,12 +2,16 @@
 // (VaultIndex.candidates and its Obsidian tie-break rules are inherited unchanged). The database is
 // kept across starts, so it is also the parse cache: a note whose size and time match is not read
 // again. Runs in the indexer worker.
-import { VaultIndex, NONE, baseOf, fileKeyPath, aliasKeys, noteTagKeys } from '../core/vault-index.ts';
+import { VaultIndex, NONE, baseOf, fileKeyPath, aliasKeys, noteTagKeys, type Stamp } from '../core/vault-index.ts';
 import type { Note } from '../core/types.ts';
+import { LOOKUP_INDEXES } from './schema.ts';
 import { FuzzyTitles } from './fuzzy.ts';
 
 const ALIAS = 0, TAG = 1, MATCHER = 2;
 const WRITES_PER_COMMIT = 20000;
+/** Room for the database's pages in memory, in KB: day to day, and for a scan into an empty database. */
+export const CACHE_KB = 2048;
+const BULK_CACHE_KB = 16384;
 
 export class SqlIndex extends VaultIndex {
   override readonly inPlace = true;
@@ -18,11 +22,28 @@ export class SqlIndex extends VaultIndex {
 
   private fuzzyTitles: FuzzyTitles;
 
-  constructor(db: any) { super(); this.db = db; this.fuzzyTitles = FuzzyTitles.attach(this); }
+  constructor(db: any) {
+    super(); this.db = db;
+    this.fuzzyTitles = new FuzzyTitles(db);
+    // A scan into an empty database that never finished has left them out.
+    this.bulk(false);
+  }
 
   override fuzzy(title: string, limit: number) {
     this.flush();
     return this.fuzzyTitles.match(title, limit);
+  }
+
+  /**
+   * For a scan into an empty database: without the indexes only lookups need, and with more room
+   * for pages in memory, while it lasts. Lookups meanwhile are right but slow.
+   */
+  override bulk(on: boolean) {
+    this.flush();
+    for (const [name, cols] of LOOKUP_INDEXES) this.db.exec(on ? `DROP INDEX IF EXISTS ${name}` : `CREATE INDEX IF NOT EXISTS ${name} ON ${cols}`);
+    this.db.exec(`PRAGMA cache_size = ${on ? -BULK_CACHE_KB : -CACHE_KB}`);
+    this.fuzzyTitles.bulk(on);
+    if (!on) this.db.exec('PRAGMA shrink_memory');
   }
 
   // ---------- statements ----------
@@ -57,10 +78,11 @@ export class SqlIndex extends VaultIndex {
     const s = this.st(sql);
     try { if (bind) s.bind(bind); s.step(); } finally { s.reset(true); }
   }
-  /** Writes go into a transaction, committed every few thousand writes and by flush(). */
-  private write() {
+  /** Writes go into a transaction, committed every few thousand rows and by flush(). */
+  private write(rows = 1) {
+    if (this.inTx && this.writes >= WRITES_PER_COMMIT) { this.db.exec('COMMIT'); this.inTx = false; }
     if (!this.inTx) { this.db.exec('BEGIN'); this.inTx = true; this.writes = 0; }
-    if (++this.writes >= WRITES_PER_COMMIT) { this.db.exec('COMMIT'); this.inTx = false; }
+    this.writes += rows;
   }
   override flush() { if (this.inTx) { this.db.exec('COMMIT'); this.inTx = false; } }
   close() {
@@ -119,7 +141,7 @@ export class SqlIndex extends VaultIndex {
   override aliasPaths(key: string) { return this.keyed(ALIAS, key); }
   override tagPaths(key: string) { return this.keyed(TAG, key); }
   override keyPaths(key: string) { return this.keyed(MATCHER, key); }
-  override stampOf(path: string): { size: number; mtime: number } | undefined {
+  override stampOf(path: string): Stamp | undefined {
     const r = this.one('SELECT n.size, n.mtime FROM files f JOIN notes n ON n.id = f.id WHERE f.path = ?', [path]);
     return r && { size: r[0], mtime: r[1] };
   }
@@ -129,11 +151,16 @@ export class SqlIndex extends VaultIndex {
     const aliases = JSON.parse(r[3]), tags = JSON.parse(r[4]), links = JSON.parse(r[5]);
     return { path, size: r[1], mtime: r[2], aliases: aliases.length ? aliases : NONE, tags: tags.length ? tags : NONE, links: links.length ? links : NONE };
   }
-  override noteCount(): number { return this.one('SELECT count(*) FROM notes')![0]; }
+  /** Counted once and kept up from there: a scan asks after every batch. */
+  private count = -1;
+  override noteCount(): number { return this.count < 0 ? this.count = this.one('SELECT count(*) FROM notes')![0] : this.count; }
   override filePaths(): string[] { return this.col('SELECT path FROM files'); }
+  override pathsIn(folder: string): string[] {
+    // '0' is the character after '/': every path that starts with folder + '/'.
+    return this.col('SELECT path FROM files WHERE path >= ? AND path < ?', [folder + '/', folder + '0']);
+  }
   override notePaths(): string[] { return this.col('SELECT f.path FROM files f JOIN notes n ON n.id = f.id'); }
   override notesIn(folder: string): Note[] {
-    // '0' is the character after '/': every path that starts with folder + '/'.
     const paths = this.col('SELECT f.path FROM files f JOIN notes n ON n.id = f.id WHERE f.path >= ? AND f.path < ?', [folder + '/', folder + '0']);
     return paths.map((p) => this.note(p)!);
   }
@@ -173,7 +200,7 @@ export class SqlIndex extends VaultIndex {
    */
   override upsertNotes(notes: Note[]) {
     if (!notes.length) return;
-    this.write();
+    this.write(notes.length);
     const paths = JSON.stringify(notes.map((n) => n.path));
     const ids = new Map<string, number>();
     for (const [p, id] of this.rows('SELECT f.path, f.id FROM json_each(?) j JOIN files f ON f.path = j.value', [paths])) ids.set(p, id);
@@ -186,6 +213,7 @@ export class SqlIndex extends VaultIndex {
     const added = notes.filter((n) => !known.has(n.path)).map((n) => [n.path, baseOf(fileKeyPath(n.path))]);
     if (added.length) {
       this.named.clear();
+      if (this.count >= 0) this.count += added.length;
       for (const [p, id] of this.rows('INSERT INTO files(path, name) SELECT value ->> 0, value ->> 1 FROM json_each(?) RETURNING path, id', [JSON.stringify(added)])) ids.set(p, id);
     }
     const rows: unknown[] = [], names: unknown[] = [], keys: unknown[] = [];
@@ -200,13 +228,25 @@ export class SqlIndex extends VaultIndex {
       SELECT value ->> 0, value ->> 1, value ->> 2, value ->> 3, value ->> 4, value ->> 5 FROM json_each(?)`, [JSON.stringify(rows)]);
     if (names.length) this.run('INSERT INTO link_names(note, name, links) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', [JSON.stringify(names)]);
     if (keys.length) this.run('INSERT OR IGNORE INTO note_keys(kind, key, note) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', [JSON.stringify(keys)]);
+    this.fuzzyTitles.putMany(notes.map((n) => ({ id: ids.get(n.path)!, path: n.path, aliases: n.aliases, isNew: !known.has(n.path) })));
     for (const n of notes) for (const fn of this.listeners) fn(n.path, known.has(n.path) ? 'update' : 'add');
   }
-  /** Every note's file size and time, by path: what a scan checks each file against. */
-  override stamps(): Map<string, { size: number; mtime: number }> {
-    const out = new Map<string, { size: number; mtime: number }>();
-    for (const [p, size, mtime] of this.rows('SELECT f.path, n.size, n.mtime FROM files f JOIN notes n ON n.id = f.id')) out.set(p, { size, mtime });
+  /** Every file by path, a note with its file size and time: what a scan checks each file against. */
+  override stamps(): Map<string, Stamp | null> {
+    const out = new Map<string, Stamp | null>();
+    const s = this.st('SELECT f.path, n.size, n.mtime FROM files f LEFT JOIN notes n ON n.id = f.id');
+    try {
+      while (s.step()) { const size = s.get(1); out.set(s.get(0), size === null ? null : { size, mtime: s.get(2) }); }
+    } finally { s.reset(true); }
     return out;
+  }
+  /** Has a full scan of the vault finished into this database? Until one has, it holds a part of the vault. */
+  get scanned(): boolean { return this.one("SELECT v FROM meta WHERE k = 'scanned'")?.[0] === '1'; }
+  markScanned() {
+    if (this.scanned) return;
+    this.write();
+    this.run("INSERT OR REPLACE INTO meta(k, v) VALUES ('scanned', '1')");
+    this.flush();
   }
   override moveNote(from: string, to: string): boolean {
     const note = this.note(from);
@@ -219,6 +259,7 @@ export class SqlIndex extends VaultIndex {
     // A link's name key can depend on the note's folder (./ and ../ links).
     this.run('DELETE FROM link_names WHERE note = ?', [id]);
     this.addLinkNames(id, note.links, to);
+    this.fuzzyTitles.putMany([{ id, path: to, aliases: note.aliases, isNew: false }]);
     for (const fn of this.listeners) fn(to, 'add');
     return true;
   }
@@ -235,7 +276,7 @@ export class SqlIndex extends VaultIndex {
     const isNote = this.one('SELECT 1 FROM notes WHERE id = ?', [id]) !== undefined;
     this.run('DELETE FROM link_names WHERE note = ?', [id]);
     this.run('DELETE FROM note_keys WHERE note = ?', [id]);
-    if (isNote) this.run('DELETE FROM notes WHERE id = ?', [id]);
+    if (isNote) { this.run('DELETE FROM notes WHERE id = ?', [id]); this.fuzzyTitles.remove(id); if (this.count > 0) this.count--; }
     this.run('DELETE FROM files WHERE id = ?', [id]);
     this.named.clear();
   }

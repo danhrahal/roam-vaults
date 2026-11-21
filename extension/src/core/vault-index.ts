@@ -54,6 +54,7 @@ export function toNote(p: ParsedNote, size = 0, mtime = 0): Note {
   };
 }
 
+export interface Stamp { size: number; mtime: number }
 export type FileListener = (path: string, kind: 'add' | 'remove' | 'update') => void;
 
 export class VaultIndex {
@@ -227,7 +228,7 @@ export class VaultIndex {
   fuzzy(_title: string, _limit: number): { path: string; score: number; sim: number; kind: number }[] | null { return null; }
   note(path: string): Note | undefined { return this.notes.get(path); }
   /** A note's file size and time when it was read, if it is in the index. */
-  stampOf(path: string): { size: number; mtime: number } | undefined { return this.notes.get(path); }
+  stampOf(path: string): Stamp | undefined { return this.notes.get(path); }
   noteCount(): number { return this.notes.size; }
   /** Every path in the vault, notes and attachments. */
   filePaths(): string[] { return [...this.files.keys()]; }
@@ -247,8 +248,18 @@ export class VaultIndex {
   keysMadeWith(_settings: string): boolean { return false; }
   /** Add or update several notes. */
   upsertNotes(notes: Note[]) { for (const n of notes) this.upsertNote(n); }
-  /** Every note's file size and time, by path. */
-  stamps(): Map<string, { size: number; mtime: number }> { return new Map(this.notes); }
+  /** Every file by path, with a note's file size and time when it was read (null for an attachment). */
+  stamps(): Map<string, Stamp | null> {
+    const out = new Map<string, Stamp | null>();
+    for (const p of this.files.keys()) out.set(p, this.notes.get(p) ?? null);
+    return out;
+  }
+  /** Every path inside a folder, at any depth. */
+  pathsIn(folder: string): string[] {
+    const out: string[] = [];
+    for (const p of this.files.keys()) if (p.startsWith(folder + '/')) out.push(p);
+    return out;
+  }
   /** Move a note to a path that has no file, keeping what is known of it. False if there was none. */
   moveNote(from: string, to: string): boolean {
     const n = this.note(from);
@@ -261,6 +272,8 @@ export class VaultIndex {
   readonly inPlace: boolean = false;
   /** Writes are complete for now (a store that batches them commits). */
   flush() {}
+  /** Many notes are about to be written to an empty index (true), or have been (false). */
+  bulk(_on: boolean) {}
 
   // ---------- public API ----------
   build(notes: Note[], attachments: string[]) {

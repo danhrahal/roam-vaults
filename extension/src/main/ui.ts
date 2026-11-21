@@ -17,6 +17,7 @@ const STYLES = `
 .rv-sec.rv-collapsed .rv-sec-body{display:none}
 .rv-sec-body{margin-top:4px}
 .rv-group{margin-bottom:10px}
+.rv-more{height:1px}
 .rv-group-head{align-items:center;gap:2px;flex-wrap:wrap}
 .rv-group-caret{cursor:pointer}
 .rv-group-title{margin-right:8px}
@@ -68,6 +69,7 @@ const STYLES = `
 .rv-settings-name{flex:1 1 100px;min-width:0;font-weight:500;overflow-wrap:anywhere}
 .rv-settings .bp3-button{flex:0 1 auto;white-space:normal;text-align:left}
 .rv-settings-status{font-weight:400;font-size:12px;color:#8a9ba8}
+.rv-settings .bp3-progress-bar{margin:5px 0 3px}
 .bp3-dark .rv-sec-head strong{color:#5c7080}
 `;
 
@@ -135,6 +137,7 @@ const caret = (open: boolean, extra = '') =>
 
 export function renderPanel(el: HTMLElement, vaults: PanelVault[]) {
   el.className = 'rv-panel';
+  drawing.get(el)?.disconnect(); drawing.delete(el);
   // With no vaults connected the page shows nothing; vaults are added in the extension's settings.
   if (!vaults.length) { el.replaceChildren(); return; }
   // Like Roam's own reference sections, nothing explains itself: no matches means no section,
@@ -151,8 +154,18 @@ export function renderPanel(el: HTMLElement, vaults: PanelVault[]) {
   const collapsed = isCollapsed();
   el.replaceChildren(h('div', { class: 'rv-sec' + (collapsed ? ' rv-collapsed' : '') },
     sectionHead(`${n} External Vault References`, !collapsed),
-    h('div', { class: 'rv-sec-body' }, resultBody(ready, vaults.length > 1))));
+    h('div', { class: 'rv-sec-body' }, resultBody(el, ready, vaults.length > 1))));
 }
+
+// A page named like a common tag can have thousands of notes to list, and drawing them all at once
+// holds Roam up (4,000 notes: over half a second; 40,000: 20 seconds). So a panel draws its first
+// notes and adds the rest as the end of the list comes near the window, as the page is scrolled.
+const ROWS_AT_ONCE = 60;
+const NEAR = '800px'; // how far below the window the end of the list may be before more is drawn
+/** The observer watching the end of each panel's list, while there are notes left to draw. */
+const drawing = new WeakMap<HTMLElement, IntersectionObserver>();
+/** How many notes each panel has drawn, and for which page. */
+const reached = new WeakMap<HTMLElement, { title: string; n: number }>();
 
 function sectionHead(label: string, open = true, tools: HTMLElement[] = []) {
   const head = h('div', { class: 'rv-sec-head' },
@@ -174,10 +187,10 @@ function sectionHead(label: string, open = true, tools: HTMLElement[] = []) {
 
 /** Notes from every ready vault: the notes that are this page first, then notes linking here,
  *  then notes only tagged here. With more than one vault, each title starts with its vault name. */
-function resultBody(list: { v: PanelVault; r: PageResult }[], showVault: boolean): HTMLElement {
+function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[], showVault: boolean): HTMLElement {
   const out = h('div', { class: 'rv-groups' });
   /** One note: caret + (vault/)path as a namespaced title (+ tag); content shows when open. The open-in-editor button lives in the viewer. */
-  const group = (v: PanelVault, key: string, path: string, defOpen: boolean, extras: (Node | null)[], content: () => HTMLElement, cls = '', marks: number[] = []) => {
+  const group = (v: PanelVault, key: string, path: string, defOpen: boolean, tag: string | undefined, content: () => HTMLElement, cls = '', marks: number[] = []) => {
     const k = `${v.id}\n${key}\n${path}`;
     const box = h('div', { class: 'rv-content' });
     const c = caret(false, 'rm-caret-showing rv-group-caret');
@@ -198,28 +211,63 @@ function resultBody(list: { v: PanelVault; r: PageResult }[], showVault: boolean
         h('div', { class: 'rm-ref-page-view-title rv-group-title' },
           h('span', { class: 'rv-note', title: `${v.name}/${path}`, onclick: () => v.act.view(path) },
             showVault ? h('span', { class: 'rv-vault' }, `${v.name}/`) : null, ...marked(path.replace(/\.md$/i, ''), path.lastIndexOf('/') + 1, marks))),
-        ...extras),
+        tag ? h('span', { class: 'rv-tagref' }, `#${tag}`) : null),
       box);
   };
   // rm-reference-item: Roam's own grey reference background.
   const preview = (v: PanelVault, path: string) => () => { const el = h('div', { class: 'rv-viewer-body rv-preview rm-reference-item' }); loadPreview(el, path, v.act); return el; };
 
+  // The list is worked out whole, as one small function per note, and drawn a part at a time.
   // A note shows once: a tagged note that also links here gets the tag next to its title.
+  const rows: (() => HTMLElement)[] = [];
   const tagsOf = new Map(list.map(({ v, r }) => [v, new Map(r.tagged.map((t) => [t.path, t.tag]))]));
-  const tagRef = (v: PanelVault, path: string) => {
+  const tagOnce = (v: PanelVault, path: string) => {
     const tags = tagsOf.get(v)!, t = tags.get(path); tags.delete(path);
-    return t ? h('span', { class: 'rv-tagref' }, `#${t}`) : null;
+    return t;
   };
-  for (const { v, r } of list) for (const c of r.counterparts)
-    out.append(group(v, 'page', c.path, false, [tagRef(v, c.path)], preview(v, c.path)));
-  for (const { v, r } of list) for (const b of r.backlinks)
-    out.append(group(v, 'links', b.path, true, [tagRef(v, b.path)],
+  for (const { v, r } of list) for (const c of r.counterparts) {
+    const tag = tagOnce(v, c.path);
+    rows.push(() => group(v, 'page', c.path, false, tag, preview(v, c.path)));
+  }
+  for (const { v, r } of list) for (const b of r.backlinks) {
+    const tag = tagOnce(v, b.path);
+    rows.push(() => group(v, 'links', b.path, true, tag,
       () => h('div', {}, ...b.lines.map((l) => blockEl(l.text, () => v.act.view(b.path, l.line))))));
-  for (const { v, r } of list) for (const t of r.tagged) if (tagsOf.get(v)!.has(t.path))
-    out.append(group(v, 'tag', t.path, false, [tagRef(v, t.path)], preview(v, t.path)));
+  }
+  for (const { v, r } of list) for (const t of r.tagged) {
+    const tag = tagOnce(v, t.path);
+    if (tag !== undefined) rows.push(() => group(v, 'tag', t.path, false, tag, preview(v, t.path)));
+  }
   // Notes with a name close to the title: last, faded, the letters that differ highlighted.
   for (const { v, r } of list) for (const f of r.fuzzy ?? [])
-    out.append(group(v, 'fuzzy', f.path, false, [], preview(v, f.path), ' rv-fuzzy', f.marks));
+    rows.push(() => group(v, 'fuzzy', f.path, false, undefined, preview(v, f.path), ' rv-fuzzy', f.marks));
+
+  // Drawn again for the same page (a note changed, a vault finished scanning), the list is as long
+  // as it had got, so the page doesn't jump under a reader who had scrolled down it.
+  const title = panel.dataset.title ?? '', before = reached.get(panel);
+  let drawn = 0;
+  const more = (n: number) => {
+    const part = rows.slice(drawn, drawn + n).map((row) => row());
+    drawn += part.length;
+    reached.set(panel, { title, n: drawn });
+    return part;
+  };
+  out.append(...more(Math.max(ROWS_AT_ONCE, before?.title === title ? before.n : 0)));
+  if (drawn < rows.length && typeof IntersectionObserver !== 'undefined') {
+    const end = h('div', { class: 'rv-more' });
+    out.append(end);
+    // scrollMargin: Roam's page scrolls inside the window, and rootMargin alone stops at that box
+    const io = new IntersectionObserver((entries) => {
+      if (!end.isConnected) { io.disconnect(); return; } // the panel was drawn again or removed
+      if (!entries.some((e) => e.isIntersecting)) return;
+      end.before(...more(ROWS_AT_ONCE));
+      io.unobserve(end);
+      if (drawn < rows.length) io.observe(end); // looked at afresh: it may still be near the window
+      else { end.remove(); io.disconnect(); drawing.delete(panel); }
+    }, { rootMargin: `0px 0px ${NEAR} 0px`, scrollMargin: `0px 0px ${NEAR} 0px` } as IntersectionObserverInit);
+    io.observe(end);
+    drawing.set(panel, io);
+  } else if (drawn < rows.length) out.append(...more(rows.length));
   return out;
 }
 

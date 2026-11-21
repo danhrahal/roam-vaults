@@ -1,6 +1,11 @@
 // Indexer Web Worker. Loaded from a Blob URL of this bundled file. Owns the vault
 // directory handle, the index, the IndexedDB parse cache and the file watcher.
-import { VaultEngine, inFolder, type VaultFS, type FileMeta, type Cache } from './engine.ts';
+//
+// The same file is also the walker: for every full scan the indexer starts a second worker from
+// its own URL and hands it the vault (see walker.ts for why).
+import { VaultEngine, inFolder, scanByList, type VaultFS, type FileMeta, type Cache, type ReadBatch } from './engine.ts';
+import { walk, madeHandles, textOf, obsidianFilters } from './walk.ts';
+import { runWalker, type FromWalker, type ToWalker } from './walker.ts';
 import { readNotes, writeNotes, deleteNotes } from './cache-db.ts';
 import { intern } from './core/parser.ts';
 import { NONE } from './core/vault-index.ts';
@@ -27,29 +32,14 @@ let rules = new VaultIgnore();
 // The index in SQLite, when the page handed over SQLite's compiled wasm: kept in the origin private
 // file system across starts, so it is also the parse cache and the IndexedDB one is not used.
 let store: SqlIndex | null = null;
-let formatsUsed = '';
 let live = false;      // is the file watcher running?
 let notLiveWhy = '';
 
 const post = (msg: unknown) => self.postMessage(msg);
 let shown = ''; // the state last reported
-const status = (state: string, detail = '') => { shown = state; post({ type: 'status', state, detail, live, notLiveWhy }); };
+// `scanning` is the progress of a scan that runs while the index can already answer.
+const status = (state: string, detail = '', scanning = '') => { shown = state; post({ type: 'status', state, detail, scanning, live, notLiveWhy }); };
 const noteCount = (n: number) => `${n} ${n === 1 ? 'note' : 'notes'}`;
-
-// ---------- keeping file handles from piling up ----------
-// A file handle or File object is released when the garbage collector gets to it, and the
-// collector can't see what one costs: about 10 KB, most of it outside this worker, part of it in
-// Roam's main process. Walking a 20,000-note vault makes over 40,000 of them and hardly any
-// JavaScript garbage, so none were collected until well after the scan: about 400 MB at the peak.
-// A large buffer that is never written to takes no real memory but counts as allocation, which
-// brings the next collection forward. Measured with test/memory-bench.mjs (see DEVELOPING.md).
-const HANDLES_PER_NUDGE = 2000, NUDGE_BYTES = 64 << 20;
-let handlesMade = 0;
-function madeHandles(n: number) {
-  if ((handlesMade += n) < HANDLES_PER_NUDGE) return;
-  handlesMade = 0;
-  try { new ArrayBuffer(NUDGE_BYTES); } catch { /* no room for one: nothing is lost */ }
-}
 
 // ---------- file system over a FileSystemDirectoryHandle ----------
 async function getDir(path: string): Promise<FileSystemDirectoryHandle> {
@@ -78,35 +68,17 @@ const handleFS: VaultFS = {
     const out: FileMeta[] = [];
     const found = new Map<string, FileSystemDirectoryHandle>();
     const names = new Map<string, string>();
-    const pending: Promise<void>[] = [];
     // A whole scan reads the rules afresh; one folder adds its own .gitignore files to those in use.
     const skip = folder ? rules : new VaultIgnore();
-    if (!folder) skip.setObsidianFilters((await obsidianConfig('app.json'))?.userIgnoreFilters);
-    async function walk(dir: FileSystemDirectoryHandle, prefix: string) {
-      // A folder's .gitignore applies to everything in it, so read it before the folder's entries.
-      const gi = await textOf(dir, GITIGNORE);
-      if (gi !== null) skip.addGitignore(prefix, gi);
-      for await (const [name, h] of (dir as any).entries() as AsyncIterable<[string, FileSystemHandle]>) {
-        madeHandles(1);
-        if (name.startsWith('.')) continue; // .obsidian, .trash, .git
-        const rel = (prefix ? `${prefix}/${name}` : name).normalize('NFC');
-        if (name !== name.normalize('NFC')) names.set(rel, name);
-        // Left out folders are not walked at all, so they cost nothing.
-        if (skip.ignores(rel, h.kind === 'directory')) continue;
-        if (h.kind === 'directory') { found.set(rel, h as FileSystemDirectoryHandle); await walk(h as FileSystemDirectoryHandle, rel); }
-        else if (!/\.md$/i.test(name)) out.push({ path: rel, size: 0, mtime: 0 }); // only notes need a size and time
-        else {
-          madeHandles(1);
-          pending.push((h as FileSystemFileHandle).getFile().then(
-            (f) => { out.push({ path: rel, size: f.size, mtime: f.lastModified }); },
-            () => { out.push({ path: rel, size: -1, mtime: -1 }); }));
-          if (pending.length >= 64) await Promise.all(pending.splice(0));
-        }
-      }
-    }
+    const into = {
+      diskName(path: string, name: string) { names.set(path, name); },
+      folder(path: string, h: FileSystemDirectoryHandle) { found.set(path, h); },
+      other(path: string) { out.push({ path, size: 0, mtime: 0 }); },
+      note(path: string, f: File | null) { out.push(f ? { path, size: f.size, mtime: f.lastModified } : { path, size: -1, mtime: -1 }); },
+    };
     if (!folder) {
-      await walk(root!, '');
-      await Promise.all(pending);
+      skip.setObsidianFilters(await obsidianFilters(root!));
+      await walk(root!, '', skip, into);
       dirs = found; diskNames = names; rules = skip;
       return out;
     }
@@ -116,11 +88,17 @@ const handleFS: VaultFS = {
     for (const p of [...dirs.keys()]) if (inside(p)) dirs.delete(p);
     for (const p of [...diskNames.keys()]) if (p.startsWith(folder + '/')) diskNames.delete(p);
     rules.forgetGitignores(folder);
-    await walk(await getDir(folder), folder);
-    await Promise.all(pending);
+    await walk(await getDir(folder), folder, skip, into);
     for (const [p, h] of found) dirs.set(p, h);
     for (const [p, n] of names) diskNames.set(p, n);
     return out;
+  },
+  /** A whole scan: the walker does the file access, where it can be started. */
+  async scan(each) {
+    const walker = startWalker();
+    if (walker && await walked(walker, each)) return;
+    // No worker of its own to be had (or it never spoke): walk and read here, as one folder is.
+    await scanByList(this, each);
   },
   async readText(path) { return (await getFile(path)).text(); },
   async stat(path) {
@@ -128,6 +106,62 @@ const handleFS: VaultFS = {
     catch { return null; }
   },
 };
+
+// ---------- the walker ----------
+function startWalker(): Worker | null {
+  try { return typeof Worker === 'undefined' || !self.location?.href ? null : new Worker(self.location.href); }
+  catch { return null; }
+}
+/**
+ * Have a walker walk the vault and feed `each`. Resolves to false, with nothing done, if the
+ * walker never got going; rejects if the walk or `each` fails. The walker is ended either way.
+ */
+function walked(walker: Worker, each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<boolean> {
+  const names = new Map<string, string>();
+  const reads = new Map<number, { texts: (string | null)[]; done: (texts: (string | null)[]) => void }>();
+  let spoke = false, inHand = 0;
+  let over: Extract<FromWalker, { type: 'done' }> | null = null;
+  return new Promise<boolean>((resolve, reject) => {
+    const finish = () => {
+      if (!over || inHand) return;
+      const skip = new VaultIgnore();
+      skip.setObsidianFilters(over.obsidian);
+      for (const [dir, text] of over.gitignores) skip.addGitignore(dir, text);
+      // Folder handles kept from before may be for what has since moved: they are looked up again.
+      dirs = new Map(); diskNames = names; rules = skip;
+      resolve(true);
+    };
+    walker.onmessage = ({ data }: MessageEvent<FromWalker>) => {
+      spoke = true;
+      if (data.type === 'batch') {
+        const n = data.n;
+        for (const [path, name] of data.names) names.set(path, name);
+        let asked = false;
+        const read: ReadBatch = (want) => new Promise((done) => {
+          asked = true;
+          reads.set(n, { texts: [], done });
+          walker.postMessage({ n, want } satisfies ToWalker);
+        });
+        inHand++;
+        each(data.files, read).then(() => {
+          if (!asked) walker.postMessage({ n, want: [] } satisfies ToWalker); // lets go of the batch's files
+          inHand--; finish();
+        }, reject);
+      } else if (data.type === 'texts') {
+        const r = reads.get(data.n);
+        if (!r) return;
+        for (const t of data.texts) r.texts.push(t);
+        if (data.last) { reads.delete(data.n); r.done(r.texts); }
+      } else if (data.type === 'done') { over = data; finish(); }
+      else reject(new DOMException(data.message, data.name));
+    };
+    walker.onerror = (e) => {
+      e.preventDefault?.();
+      if (spoke) reject(new Error(e.message || 'the vault could not be read')); else resolve(false);
+    };
+    walker.postMessage({ walk: root });
+  }).finally(() => walker.terminate());
+}
 
 // ---------- IndexedDB parse cache ----------
 async function loadCache(key: string): Promise<Cache> {
@@ -163,11 +197,6 @@ function saveCacheSoon(from: VaultEngine) {
 }
 
 // ---------- vault settings ----------
-/** The text of a file in a folder, or null if there is none. */
-async function textOf(dir: FileSystemDirectoryHandle, name: string): Promise<string | null> {
-  try { madeHandles(2); return await (await (await dir.getFileHandle(name)).getFile()).text(); }
-  catch { return null; }
-}
 /** One of Obsidian's settings files in .obsidian, parsed, or null. */
 async function obsidianConfig(name: string): Promise<any> {
   try { return JSON.parse((await textOf(await root!.getDirectoryHandle('.obsidian'), name)) ?? 'null'); }
@@ -272,25 +301,53 @@ async function watch() {
 // ---------- commands ----------
 async function build() {
   building++;
-  status('indexing', 'reading files');
+  if (!engine) status('indexing', 'reading files');
   try {
     if (!root) throw new Error('The vault is not connected.');
-    // The index in use stays in place until the new one is complete. Its notes are the cache
-    // for the new one; only the first scan reads the saved cache.
     const formats = await dailyFormats();
-    const progress = (done: number, total: number) => status('indexing', `${done} of ${total} notes`);
-    let next: VaultEngine, stats;
+    const current = (e: VaultEngine) => e.dailyFormats.join('\n') === formats.join('\n');
+    let e = engine;
     if (store) {
-      // One index, updated in place. A new daily format needs a new matcher.
-      if (engine && formatsUsed === JSON.stringify(formats)) next = engine;
-      else { engine?.matcher?.detach(); next = new VaultEngine(handleFS, formats, store); formatsUsed = JSON.stringify(formats); }
-      stats = await next.build(undefined, progress);
-    } else {
-      next = new VaultEngine(handleFS, formats);
-      stats = await next.build(engine ? engine.cache : await loadCache(vaultKey), progress);
-      saveCacheSoon(next);
+      // The database is the index, kept across starts and changed in place by every scan. A new
+      // daily note format needs a new matcher on it.
+      if (!e || !current(e)) {
+        e?.matcher.detach();
+        e = new VaultEngine(handleFS, formats, store);
+        // What an earlier session left answers straight away, unless its first scan never
+        // finished: that is a part of the vault, shown once the rest is in.
+        if (engine || store.scanned) engine = e;
+      }
+    } else if (!e) {
+      // A vault scanned in an earlier session answers from its saved notes straight away.
+      const cache = await loadCache(vaultKey);
+      if (cache.size) (e = engine = new VaultEngine(handleFS, formats)).adopt(cache);
     }
+    // The files of a vault that has an index are checked against it: the index stays in use, and
+    // only what differs on disk is changed in it.
+    if (e && (store || current(e))) {
+      const scanned = e, answers = engine === e;
+      const notes = () => noteCount(scanned.idx.noteCount());
+      // After a scan that failed, pages show nothing from this vault until one succeeds.
+      const failed = shown === 'error';
+      const progress = (text: string) => failed || !answers ? status('indexing', text) : status('ready', notes(), text);
+      progress('reading files');
+      let stats;
+      try { stats = await scanned.check((done, total) => progress(`${done} of ${total} notes`)); }
+      catch (err) { if (!answers) scanned.matcher.detach(); throw err; }
+      if (store) store.markScanned(); else saveCacheSoon(scanned);
+      engine = scanned;
+      status('ready', notes());
+      if (stats.changed || !answers) post({ type: 'changed', paths: [] });
+      return stats;
+    }
+    // Without a database: a first scan, or the vault's daily note format changed. A new index,
+    // built in one go. The one in use stays in place until it is complete, and its notes are the
+    // cache for the new one.
+    if (e) status('indexing', 'reading files');
+    const next = new VaultEngine(handleFS, formats);
+    const stats = await next.build(e ? e.cache : new Map(), (done, total) => status('indexing', `${done} of ${total} notes`));
     engine = next;
+    saveCacheSoon(next);
     status('ready', noteCount(stats.notes));
     post({ type: 'changed', paths: [] });
     return stats;
@@ -338,6 +395,7 @@ const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
 };
 
 self.onmessage = async ({ data }) => {
+  if (data.walk) return runWalker(self, data.walk); // this worker is a walker: it takes over from here
   const { id, cmd, args } = data;
   try { post({ id, ok: true, result: await commands[cmd](args ?? {}) }); }
   catch (e) { post({ id, ok: false, error: `${(e as Error).name}: ${(e as Error).message}` }); }

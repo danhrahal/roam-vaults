@@ -8,8 +8,12 @@
 // (FTS5 trigram stays the right tool for substring search: LIKE '%text%'.)
 //
 // Runs in the indexer worker on the vault's database (src/sql/db.ts): the migration is a step of
-// MIGRATIONS (src/sql/schema.ts), and SqlIndex keeps the table in step through its file listener
-// (attach()). Rows are keyed by the note's id in `files`.
+// MIGRATIONS (src/sql/schema.ts), and SqlIndex keeps the table in step as it writes notes (putMany,
+// remove). Rows are keyed by the note's id in `files`.
+//
+// A scan into an empty database (SqlIndex.bulk) writes only fuzzy_name, with the triggers gone, and
+// the trigrams and their counts are made from it in one pass at the end: a trigger run per name and
+// an upsert per trigram cost several times more than the rest of the scan's writes together.
 import { fuzzyKey, judge, FUZZY_MIN_LEN, type FuzzyVerdict } from '../core/fuzzy.ts';
 
 /** The parts of an oo1.DB and oo1.Stmt this module uses. */
@@ -32,9 +36,32 @@ const COMMON_FRAC = 0.05, COMMON_MIN = 200;
 const grams = (z: string) => `WITH RECURSIVE i(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM i WHERE n < length(${z}) - 2)
   SELECT DISTINCT substr(${z}, n, 3) AS g FROM i WHERE length(${z}) >= 3`;
 
-const GRAM_TRIGGER = `CREATE TRIGGER fuzzy_tri_ai AFTER INSERT ON fuzzy_tri BEGIN
+/** The triggers that keep fuzzy_tri and fuzzy_gram in step with fuzzy_name, by name. */
+const TRIGGERS: [name: string, sql: string][] = [
+  ['fuzzy_name_ai', `CREATE TRIGGER fuzzy_name_ai AFTER INSERT ON fuzzy_name BEGIN
+      INSERT INTO fuzzy_tri(g, id) SELECT g, new.id FROM (${grams('new.z')});
+    END;`],
+  ['fuzzy_name_ad', `CREATE TRIGGER fuzzy_name_ad AFTER DELETE ON fuzzy_name BEGIN
+      DELETE FROM fuzzy_tri WHERE id = old.id AND g IN (${grams('old.z')});
+    END;`],
+  ['fuzzy_tri_ai', `CREATE TRIGGER fuzzy_tri_ai AFTER INSERT ON fuzzy_tri BEGIN
       INSERT INTO fuzzy_gram(g, n) VALUES (new.g, 1) ON CONFLICT(g) DO UPDATE SET n = n + 1;
-    END;`;
+    END;`],
+  ['fuzzy_tri_ad', `CREATE TRIGGER fuzzy_tri_ad AFTER DELETE ON fuzzy_tri BEGIN
+      UPDATE fuzzy_gram SET n = n - 1 WHERE g = old.g;
+      DELETE FROM fuzzy_gram WHERE g = old.g AND n <= 0;
+    END;`],
+];
+const GRAM_TRIGGER = TRIGGERS[2][1];
+/** Every key's trigrams, and how many keys have each. The positions in a key come from a table:
+ *  a recursive query joined to every key, with the rows put in order first, took three times as long. */
+const ALL_TRIGRAMS = `
+  CREATE TEMP TABLE fuzzy_pos(n INTEGER PRIMARY KEY);
+  WITH RECURSIVE i(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM i WHERE n < (SELECT coalesce(max(length(z)), 0) - 2 FROM fuzzy_name))
+    INSERT INTO fuzzy_pos SELECT n FROM i;
+  INSERT OR IGNORE INTO fuzzy_tri(g, id) SELECT substr(f.z, p.n, 3), f.id FROM fuzzy_name f JOIN fuzzy_pos p ON p.n <= length(f.z) - 2;
+  DROP TABLE fuzzy_pos;
+  INSERT INTO fuzzy_gram(g, n) SELECT g, count(*) FROM fuzzy_tri GROUP BY g;`;
 
 export function fuzzyMigration(db: { exec(sql: string): unknown }) {
   db.exec(`
@@ -42,24 +69,11 @@ export function fuzzyMigration(db: { exec(sql: string): unknown }) {
     CREATE INDEX fuzzy_name_note ON fuzzy_name(note);
     CREATE TABLE fuzzy_tri(g TEXT NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (g, id)) WITHOUT ROWID;
     CREATE TABLE fuzzy_gram(g TEXT PRIMARY KEY, n INTEGER NOT NULL) WITHOUT ROWID;
-    CREATE TRIGGER fuzzy_name_ai AFTER INSERT ON fuzzy_name BEGIN
-      INSERT INTO fuzzy_tri(g, id) SELECT g, new.id FROM (${grams('new.z')});
-    END;
-    CREATE TRIGGER fuzzy_name_ad AFTER DELETE ON fuzzy_name BEGIN
-      DELETE FROM fuzzy_tri WHERE id = old.id AND g IN (${grams('old.z')});
-    END;
-    ${GRAM_TRIGGER}
-    CREATE TRIGGER fuzzy_tri_ad AFTER DELETE ON fuzzy_tri BEGIN
-      UPDATE fuzzy_gram SET n = n - 1 WHERE g = old.g;
-      DELETE FROM fuzzy_gram WHERE g = old.g AND n <= 0;
-    END;
+    ${TRIGGERS.map(([, sql]) => sql).join('\n    ')}
   `);
 }
 
 export interface FuzzyHit extends FuzzyVerdict { path: string; kind: typeof NAME | typeof ALIAS; key: string }
-
-/** What attach() needs of the index (SqlIndex). */
-export interface Indexed { db: Db; listeners: ((path: string, kind: 'add' | 'remove' | 'update') => void)[]; note(path: string): { aliases: readonly string[] } | undefined }
 
 const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/i, '');
 
@@ -83,18 +97,49 @@ export class FuzzyTitles {
   }
   close() { this.ins.finalize(); this.del.finalize(); }
 
-  /** Keep the table in step with an index: a note's keys are written in the same transaction as
-   *  the note. 'remove' comes before the note's rows go, a move is a remove and then an add. */
-  static attach(idx: Indexed): FuzzyTitles {
-    const f = new FuzzyTitles(idx.db);
-    idx.listeners.push((path, kind) => {
-      if (!/\.md$/i.test(path)) return;
-      const id = Number(idx.db.selectValue('SELECT id FROM files WHERE path = ?', [path]));
-      if (!id) return;
-      if (kind === 'remove') f.remove(id);
-      else f.put(id, path, idx.note(path)?.aliases ?? [], kind === 'add');
-    });
-    return f;
+  /**
+   * Replace the keys of several notes at once, in the caller's write transaction: one statement
+   * finds what the notes that were there have, and one writes every new key. isNew: the note has no
+   * rows yet. A note whose name and aliases didn't change (an edit, a Rescan) keeps its rows.
+   */
+  putMany(notes: { id: number; path: string; aliases: readonly string[]; isNew: boolean }[]) {
+    const had = new Map<number, [string, number][]>();
+    const old = notes.filter((n) => !n.isNew).map((n) => n.id);
+    if (old.length) {
+      for (const [note, z, kind] of this.db.selectArrays('SELECT note, z, kind FROM fuzzy_name WHERE note IN (SELECT value FROM json_each(?))', [JSON.stringify(old)]) as [number, string, number][]) {
+        const at = had.get(note);
+        if (at) at.push([z, kind]); else had.set(note, [[z, kind]]);
+      }
+    }
+    const rows: [number, number, string][] = [];
+    for (const n of notes) {
+      const keys = keysOf(n.path, n.aliases);
+      const h = had.get(n.id);
+      if (h) {
+        if (h.length === keys.size && h.every(([z, kind]) => keys.get(z) === kind)) continue;
+        this.remove(n.id);
+      }
+      for (const [z, kind] of keys) rows.push([n.id, kind, z]);
+    }
+    if (rows.length) this.db.exec({ sql: 'INSERT INTO fuzzy_name(note, kind, z) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', bind: [JSON.stringify(rows)] });
+  }
+
+  /**
+   * For a scan into an empty database. On: only fuzzy_name is written from here. Off: the trigrams
+   * and their counts are made from it in one pass, and kept in step again. Off is also what puts
+   * right a database whose scan stopped part way, so it runs when a database is opened.
+   */
+  bulk(on: boolean) {
+    const db = this.db;
+    if (on) { for (const [name] of TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${name}`); return; }
+    if (Number(db.selectValue("SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'fuzzy!_%' ESCAPE '!'")) === TRIGGERS.length) return;
+    db.exec('BEGIN');
+    try {
+      for (const [name] of TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
+      db.exec(`DELETE FROM fuzzy_tri; DELETE FROM fuzzy_gram; ${ALL_TRIGRAMS}`);
+      for (const [, sql] of TRIGGERS) db.exec(sql);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
   }
 
   /** Replace the keys of one note (by its id): its file name and its aliases. Run it inside a

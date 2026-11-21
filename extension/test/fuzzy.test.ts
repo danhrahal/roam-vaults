@@ -167,3 +167,39 @@ test('marks: the letters of a name that differ from the title', () => {
   assert.equal(show('Café Culture', 'cafe culture'), 'Café Culture', 'case and accents are not marked');
   assert.equal(show('🗂️ Plugin Overveiw', 'Plugins Overview'), '🗂️ Plugin Overv[ei]w');
 });
+
+test('a scan into an empty database makes the same trigram tables in one pass at the end', async () => {
+  const names: [string, string[]?][] = [...VAULT, ['Roads/Zebra Crossing.md', ['Crosswalk']], ['Öl und Gas.md'], ['ab.md'], ['Notes/Recieve Window.md']];
+  const notes = names.filter(([p]) => /\.md$/i.test(p)).map(([p, a]) => toNote(parseNote(p, fm(a))));
+  const dump = (db: any) => ({
+    tri: db.selectArrays('SELECT t.g, f.path FROM fuzzy_tri t JOIN fuzzy_name n ON n.id = t.id JOIN files f ON f.id = n.note ORDER BY 1, 2'),
+    gram: db.selectArrays('SELECT g, n FROM fuzzy_gram ORDER BY 1'),
+    triggers: db.selectValue("SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'fuzzy%'"),
+  });
+  const one = new SqlIndex((await openDb('fuzzy-one-by-one')).db);
+  for (const n of notes) one.upsertNote(n);
+  one.flush();
+  const { db } = await openDb('fuzzy-bulk');
+  const bulk = new SqlIndex(db);
+  bulk.bulk(true);
+  bulk.upsertNotes(notes.slice(0, 5));
+  bulk.upsertNotes(notes.slice(5));
+  assert.equal(db.selectValue('SELECT count(*) FROM fuzzy_tri'), 0, 'no trigram is written during the scan');
+  bulk.bulk(false);
+  assert.deepEqual(dump(db), dump((one as any).db));
+  assert.ok(dump(db).tri.length > 50);
+  assert.deepEqual(bulk.fuzzy('Zebra Crosing', 5).map((h) => h.path), ['Roads/Zebra Crossing.md']);
+  // From there the tables are kept in step again.
+  for (const idx of [one, bulk]) { idx.removeFile('Roads/Zebra Crossing.md'); idx.upsertNote(toNote(parseNote('Zebra Finch.md', ''))); idx.flush(); }
+  assert.deepEqual(dump(db), dump((one as any).db));
+
+  // A scan that stopped part way: the next time the database is opened, the tables are put right.
+  const { db: db2 } = await openDb('fuzzy-stopped');
+  const stopped = new SqlIndex(db2);
+  stopped.bulk(true);
+  stopped.upsertNotes(notes);
+  stopped.flush();
+  const reopened = new SqlIndex(db2);
+  assert.deepEqual(dump(db2), dump((await (async () => { const i = new SqlIndex((await openDb('fuzzy-ref')).db); for (const n of notes) i.upsertNote(n); i.flush(); return (i as any).db; })())));
+  assert.deepEqual(reopened.fuzzy('Zebra Crosing', 5).map((h) => h.path), ['Roads/Zebra Crossing.md']);
+});

@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { genFiles, gen } from './vault-gen.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright');
 
 const N = +(process.argv[2] ?? 20000);
@@ -24,62 +25,12 @@ const IDLE = +(process.env.IDLE_MS ?? 60000);
 const DISK = !!process.env.DISK;
 const VAULT = 'Big Vault';
 
-// ---------- a deterministic vault: folders, frontmatter, links (some unresolved), tags, daily notes ----------
-function gen(n, seed = 42) {
-  let s = seed >>> 0;
-  const rnd = () => { s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  const pick = (a) => a[Math.floor(rnd() * a.length)];
-  const W = 'alpha beta gamma delta project meeting notes design review plan budget hiring research market customer product roadmap quarterly retro idea draft system memory index graph vault link neural garden reading book paper summary people team launch metric growth strategy pricing interview onboarding weekly daily journal travel recipe health finance music film history science math physics biology language writing essay thread question answer source quote concept model theory practice habit goal value'.split(' ');
-  const cap = (w) => w[0].toUpperCase() + w.slice(1);
-  const folders = [''];
-  for (let i = 0; i < 150; i++) folders.push((rnd() < 0.5 ? cap(pick(W)) : cap(pick(W)) + '/' + cap(pick(W))) + (rnd() < 0.3 ? '/' + cap(pick(W)) : ''));
-  const titles = [], seen = new Set();
-  for (let i = 0; i < Math.floor(n * 0.15); i++) titles.push({ dir: 'Daily', t: new Date(Date.UTC(2020, 0, 1) + i * 86400000).toISOString().slice(0, 10) });
-  while (titles.length < n) {
-    const k = 1 + Math.floor(rnd() * 4); let t = cap(pick(W)); for (let j = 1; j < k; j++) t += ' ' + pick(W);
-    if (rnd() < 0.5) t += ' ' + Math.floor(rnd() * 1000);
-    if (seen.has(t.toLowerCase()) && rnd() < 0.97) continue;
-    seen.add(t.toLowerCase());
-    titles.push({ dir: pick(folders), t });
-  }
-  const sentence = () => { const k = 6 + Math.floor(rnd() * 14); let o = cap(pick(W)); for (let j = 1; j < k; j++) o += ' ' + pick(W); return o + '.'; };
-  const link = () => {
-    const r = rnd();
-    if (r < 0.1) return `[[${cap(pick(W))} ${pick(W)} ${pick(W)} unwritten]]`;
-    const t = titles[Math.floor(Math.pow(rnd(), 3) * titles.length)].t; // a few notes get most of the links
-    return r < 0.2 ? `[[${t}|${pick(W)} ${pick(W)}]]` : r < 0.25 ? `[[${t}#${cap(pick(W))}]]` : `[[${t}]]`;
-  };
-  const files = new Map();
-  for (const { dir, t } of titles) {
-    let o = '';
-    if (rnd() < 0.7) {
-      o += '---\n';
-      if (rnd() < 0.15) o += `aliases: [${cap(pick(W))} ${pick(W)}, ${pick(W)}]\n`;
-      o += `tags: [${pick(W)}, ${pick(W)}/${pick(W)}]\n`;
-      o += `created: 2024-0${1 + Math.floor(rnd() * 9)}-1${Math.floor(rnd() * 9)}T10:00:00\nupdated: 2025-0${1 + Math.floor(rnd() * 9)}-1${Math.floor(rnd() * 9)}T10:00:00\n`;
-      o += `status: ${pick(['draft', 'done', 'evergreen', 'seedling'])}\nsource: https://example.com/${pick(W)}/${pick(W)}-${Math.floor(rnd() * 1e6)}\nauthor: "${cap(pick(W))} ${cap(pick(W))}"\n`;
-      if (rnd() < 0.3) o += `related:\n  - "${link()}"\n  - "${link()}"\n`;
-      if (rnd() < 0.3) o += `summary: ${sentence()} ${sentence()}\n`;
-      o += '---\n';
-    }
-    o += `# ${t}\n\n`;
-    const paras = Math.max(1, Math.floor(Math.exp(0.8 + rnd() * 2.2 + (rnd() < 0.03 ? 2 : 0)))); // about 3 KB a note, a few of 50 KB
-    for (let p = 0; p < paras; p++) {
-      if (p % 5 === 4) o += `## ${cap(pick(W))} ${pick(W)}\n\n`;
-      if (rnd() < 0.5) { const k = 2 + Math.floor(rnd() * 5); for (let j = 0; j < k; j++) o += `- ${sentence()}${rnd() < 0.45 ? ' ' + link() : ''}${rnd() < 0.08 ? ' #' + pick(W) : ''}${rnd() < 0.03 ? ' ^blk' + Math.floor(rnd() * 1e5) : ''}\n`; o += '\n'; }
-      else o += `${sentence()} ${rnd() < 0.5 ? link() + ' ' : ''}${sentence()} ${sentence()}${rnd() < 0.2 ? ' [' + pick(W) + '](https://example.com/' + pick(W) + ')' : ''}\n\n`;
-    }
-    files.set(`${dir ? dir + '/' : ''}${t}.md`, o);
-  }
-  for (let i = 0; i < Math.floor(n / 10); i++) files.set(`Attachments/${pick(W)}-${i}.png`, '');
-  return files;
-}
-
 // ---------- server: the stand-in Roam page, the build under test, and a worker that writes the vault ----------
 const html = `<!doctype html><meta charset=utf-8><title>stand-in for Roam</title>
 <div class="roam-article"><h1 class="rm-title-display">Start</h1>
 <div><div class="rm-reference-main">Linked References</div></div></div>`;
-const seedWorker = `${gen}
+const seedWorker = `${genFiles}
+${gen}
 onmessage = async ({ data: { n, name } }) => {
   const files = gen(n);
   const root = await (await navigator.storage.getDirectory()).getDirectoryHandle(name, { create: true });
@@ -206,7 +157,7 @@ async function loadExtension(ctx, p) {
     // count the vault walks: each one reports "indexing" first
     window.__walks = 0;
     const W = window.Worker;
-    window.Worker = class extends W { constructor(...a) { super(...a); this.addEventListener('message', ({ data }) => { if (data?.type === 'status' && data.state === 'indexing' && data.detail === 'reading files') window.__walks++; }); } };
+    window.Worker = class extends W { constructor(...a) { super(...a); this.addEventListener('message', ({ data }) => { if (data?.type === 'status' && (data.detail === 'reading files' || data.scanning === 'reading files')) window.__walks++; }); } };
     window.__title = 'Start';
     window.roamAlphaAPI = { ui: { mainWindow: { getOpenPageOrBlockUid: async () => 'uid' } }, pull: () => ({ ':node/title': window.__title }) };
     window.__effects = [];
@@ -238,17 +189,16 @@ let ctx, p, seeded;
 // away while the vault is open, none of which should walk the whole vault again.
 const NFD_NOTE = 'Re\u0301sume\u0301s/2026/Cafe\u0301 plan.md', MOVED_DIR = 'Moved later', MOVED_TO = 'Moved now';
 if (DISK) {
-  const files = gen(N);
-  files.set(NFD_NOTE, 'the line of the decomposed note [[Disk name check]]\n');
-  files.set(`${MOVED_DIR}/Deep/Kept.md`, 'the line of the moved note [[Folder move check]]\n');
-  seeded = { files: files.size, bytes: 0, links: 0 };
-  const made = new Set();
-  for (const [rel, text] of files) {
+  const extra = [[NFD_NOTE, 'the line of the decomposed note [[Disk name check]]\n'], [`${MOVED_DIR}/Deep/Kept.md`, 'the line of the moved note [[Folder move check]]\n']];
+  seeded = { files: 0, bytes: 0, links: 0 };
+  const made = new Set(), paths = new Set();
+  for (const [rel, text] of (function* () { yield* genFiles(N); yield* extra; })()) {
     const f = path.join(vaultDir, rel), d = path.dirname(f);
     if (!made.has(d)) { fs.mkdirSync(d, { recursive: true }); made.add(d); }
     fs.writeFileSync(f, text);
-    seeded.bytes += Buffer.byteLength(text); seeded.links += text.split('[[').length - 1;
+    seeded.bytes += Buffer.byteLength(text); seeded.links += text.split('[[').length - 1; paths.add(rel);
   }
+  seeded.files = paths.size;
 } else {
   ctx = await launch();
   p = await openPage(ctx);
@@ -280,7 +230,11 @@ p = await openPage(ctx);
 base = null;
 await settle(p, 'page without the extension');
 await loadExtension(ctx, p);
+await p.evaluate(() => { window.__title = 'Alpha'; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+const tStart = Date.now();
 await press(p, 'Add vault folder');
+await p.waitForFunction(() => !!document.querySelector('.rv-panel .rv-sec-head strong')?.textContent, null, { timeout: 900000, polling: 100 });
+console.log(`start from the cache: a page shows its vault notes after ${Date.now() - tStart} ms`);
 console.log(`start from the cache took ${await indexed(p)} ms`);
 await settle(p, 'later start: just finished');
 await settle(p, 'later start: idle', IDLE);

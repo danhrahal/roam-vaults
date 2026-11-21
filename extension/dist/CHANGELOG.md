@@ -7,6 +7,24 @@
   another order. They come last, faded, with the letters that differ highlighted in Roam's highlight
   colour. Every word must start with the same letter and keep its numbers, and titles under five letters
   get none, so `Q3 Plan` never matches `Q4 Plan` and `Might` never matches `Eight`.
+- The vault index is kept in a database on disk (SQLite, in the Roam app's storage on this computer)
+  instead of in memory, so a large vault takes much less memory while Roam is open. A first scan takes
+  longer. The index is built again by the first scan after this update. Removing a vault deletes its
+  database.
+- A page with thousands of vault notes to list (one named like a common tag, for example) no longer
+  holds Roam up while they are all drawn. The first notes are drawn, and the rest as the page is scrolled.
+- Scanning a large vault uses much less memory at its peak, on Rescan most of all. The files are walked
+  and read in a helper that exists only for the scan, so the file handles a scan makes are given back as
+  it goes instead of piling up next to the index.
+- A first scan is faster: each note is looked up on disk once instead of twice.
+- After Roam starts, pages show their vault notes as soon as the saved index is loaded, instead of after
+  every file in the vault has been checked. The check then runs in the background and settings show its
+  progress.
+- Rescan, and the check at start, change the index in place instead of building a second one beside it,
+  so pages keep their vault notes while it runs and it needs less memory.
+- While a vault is scanned, its row in settings shows a progress bar above the status. A vault that was
+  scanned before fills the bar by the notes counted. A first scan has no total to count towards, so its bar
+  is striped until the scan is done.
 
 ## 0.1.1 (2026-11-17)
 

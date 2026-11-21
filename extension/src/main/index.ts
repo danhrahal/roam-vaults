@@ -4,7 +4,7 @@ import { loadVaults, saveVaults } from './store.ts';
 import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
-import { createSettingsPanel, type SettingsVault } from './settings.ts';
+import { createSettingsPanel, scanProgress, type SettingsVault } from './settings.ts';
 import { ATTR, installStyles, renderPanel, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult } from '../engine.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
@@ -45,7 +45,7 @@ class Vault implements PanelVault {
       if (data.id !== undefined) {
         const w = this.waiting.get(data.id); this.waiting.delete(data.id);
         if (data.ok) w?.res(data.result); else w?.rej(new Error(data.error));
-      } else if (data.type === 'status') this.onStatus(data.state, data.detail, data.live, data.notLiveWhy);
+      } else if (data.type === 'status') this.onStatus(data.state, data.detail, data.live, data.notLiveWhy, data.scanning);
       else if (data.type === 'changed') { this.stale(); refreshAll(); }
     };
     this.worker.onerror = (e) => {
@@ -71,6 +71,8 @@ class Vault implements PanelVault {
     return new Promise((res, rej) => { this.waiting.set(id, { res, rej }); this.worker.postMessage({ id, cmd, args }); });
   }
   notes = '';
+  /** Progress of a scan that runs while the vault can already answer (state "ready"), or ''. */
+  scanning = '';
   private stale() { this.gen++; this.results.clear(); }
   /** Settle every call still waiting on the worker, so nothing waits for an answer that can't come. */
   private fail(e: Error) {
@@ -78,22 +80,24 @@ class Vault implements PanelVault {
     this.waiting.clear();
     waiting.forEach((w) => w.rej(e));
   }
-  set(s: SectionState) {
+  set(s: SectionState, scanning = '') {
     if (this.stopped) return;
-    // Progress of a scan only shows in settings: pages have nothing to redraw for it.
-    const progress = s.kind === 'indexing' && this.state.kind === 'indexing';
+    // Progress of a scan only shows in settings: pages have nothing to redraw for it. That goes
+    // for a vault that stays ready too: what changes in its index comes as a "changed" message.
+    const progress = s.kind === this.state.kind && (s.kind === 'indexing' || s.kind === 'ready');
     this.state = s;
-    this.mark(s.kind === 'indexing' || s.kind === 'unfinished');
+    this.scanning = scanning;
+    this.mark(s.kind === 'indexing' || s.kind === 'unfinished' || !!scanning);
     if (!progress) { this.stale(); refreshAll(); }
     changed();
   }
-  private onStatus(s: string, detail: string, live: boolean, notLiveWhy: string) {
+  private onStatus(s: string, detail: string, live: boolean, notLiveWhy: string, scanning = '') {
     if (s === 'indexing') this.set({ kind: 'indexing', detail });
     else if (s === 'error') this.set({ kind: 'error', detail });
     else if (s === 'ready') {
       this.notes = detail;
-      if (!live) console.warn('[roam-vaults]', this.name, 'no live updates:', notLiveWhy);
-      this.set({ kind: 'ready', result: null, live });
+      if (!live && !scanning) console.warn('[roam-vaults]', this.name, 'no live updates:', notLiveWhy);
+      this.set({ kind: 'ready', result: null, live }, scanning);
     }
   }
   /** Set or clear the scan mark (see scan-mark.ts). */
@@ -104,7 +108,7 @@ class Vault implements PanelVault {
   }
   /** Roam is closing or reloading mid-scan, which isn't a crash: the scan starts again next time. */
   closing() {
-    if (this.state.kind !== 'indexing' || this.token === null) return;
+    if ((this.state.kind !== 'indexing' && !this.scanning) || this.token === null) return;
     closeScanMark(this.id, this.token);
     this.token = null;
   }
@@ -163,8 +167,10 @@ function settingsVault(v: Vault): SettingsVault {
     : s.kind === 'unfinished' ? "Last scan didn't finish"
     : s.kind === 'indexing' ? `Indexing${s.detail ? ` ${s.detail}` : '…'}`
     : s.kind === 'error' ? `Couldn't read: ${s.detail}`
+    : v.scanning ? `Indexing ${v.scanning}` // its files are being checked, and pages show what it has
     : `${v.notes || 'Ready'}${s.live ? '' : ' · not live'}`;
-  return { id: v.id, name: v.name, status, needsPermission: s.kind === 'permission', unfinished: s.kind === 'unfinished', reconnect: () => v.connect(true), remove: () => removeVault(v) };
+  const progress = s.kind === 'indexing' ? scanProgress(s.detail) : s.kind === 'ready' && v.scanning ? scanProgress(v.scanning) : undefined;
+  return { id: v.id, name: v.name, status, progress, needsPermission: s.kind === 'permission', unfinished: s.kind === 'unfinished', reconnect: () => v.connect(true), remove: () => removeVault(v) };
 }
 const save = () => { changed(); return saveVaults(vaults.map((v) => ({ id: v.id, handle: v.handle }))).catch((e) => console.warn('[roam-vaults]', e)); };
 
@@ -183,10 +189,21 @@ async function addVault() {
 }
 const dropCache = (v: Vault) => Promise.all([
   deleteNotes(v.id).catch((e) => console.warn('[roam-vaults] cache not cleared', e)),
-  // The vault's SQLite database, once its worker has let go of it.
-  navigator.storage.getDirectory().then((d) => d.getDirectoryHandle(SQL_DIR)).then((d) => d.removeEntry(poolName(v.id), { recursive: true }))
-    .catch((e) => { if ((e as Error)?.name !== 'NotFoundError') console.warn('[roam-vaults] index not cleared', e); }),
+  dropDatabase(v.id),
 ]);
+/** Delete a vault's SQLite database. Its worker, just ended, can hold the files a moment longer. */
+async function dropDatabase(id: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(SQL_DIR);
+      return await dir.removeEntry(poolName(id), { recursive: true });
+    } catch (e) {
+      if ((e as Error)?.name === 'NotFoundError') return;
+      if (attempt === 5) return console.warn('[roam-vaults] index not cleared', e);
+      await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+    }
+  }
+}
 async function removeVault(v: Vault) {
   v.stop(); // terminates the worker first, so no pending cache save can recreate the entry
   await dropCache(v);

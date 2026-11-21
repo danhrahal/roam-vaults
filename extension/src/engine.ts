@@ -17,7 +17,15 @@ export interface VaultFS {
   readText(path: string): Promise<string>;
   /** Metadata for one path, or null if it no longer exists. */
   stat(path: string): Promise<FileMeta | null>;
+  /**
+   * The whole vault, handed over as it is walked, for a full scan to use in place of list() and
+   * readText(). `each` gets some of the files and a function that reads the text of the ones named
+   * by their position among them (null for one that can't be read); it may be called for a few
+   * batches at once, and whatever it throws ends the scan.
+   */
+  scan?(each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void>;
 }
+export type ReadBatch = (want: number[]) => Promise<(string | null)[]>;
 /** Notes from an earlier scan, by path. A note is used again while its file's size and time match. */
 export type Cache = Map<string, Note>;
 
@@ -40,7 +48,8 @@ export interface FuzzyNote {
    *  Empty when the match was an alias. */
   marks: number[];
 }
-export interface BuildStats { notes: number; files: number; reread: number; cached: number; errors: string[]; ms: number }
+/** `changed`: did the scan leave the index different from how it found it? */
+export interface BuildStats { notes: number; files: number; reread: number; cached: number; changed: boolean; errors: string[]; ms: number }
 
 /** Tiers 1–5 of FEASIBILITY.md §5: the strong matches shown in the MVP. */
 const TIER_LABEL: Partial<Record<NoteHow, string>> = {
@@ -61,8 +70,8 @@ const MAX_FUZZY = 5;
 /** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
 const MAX_TEXT_CHARS = 1_000_000;
 const READS_AT_ONCE = 16;
-/** Notes written to an index kept in place per call, during a scan. */
-const BATCH = 200;
+/** Files handed over at a time by a scan. */
+export const SCAN_BATCH = 500;
 
 export class VaultEngine {
   idx = new VaultIndex();
@@ -74,107 +83,149 @@ export class VaultEngine {
   private textChars = 0;
 
   private fs: VaultFS;
-  private dailyFormats: string[];
-  /** An index kept in place across scans (a database), or none: each scan builds a new one in memory. */
+  readonly dailyFormats: string[];
+  /** An index kept across starts (a database), or none: the index is built in memory and its
+   *  notes are saved by whoever owns the engine (see `unsaved`). */
   private store: VaultIndex | null;
   constructor(fs: VaultFS, dailyFormats: string[] = ['YYYY-MM-DD'], store: VaultIndex | null = null) {
     this.fs = fs; this.dailyFormats = dailyFormats; this.store = store;
-    if (store) { this.idx = store; store.preferNearby = true; }
+    if (!store) return;
+    // What the store holds is in use from here on: it is its own cache, and check() is its scan.
+    this.idx = store; store.preferNearby = true;
+    this.matcher = new RoamMatcher(store, { dailyFormats, sanitized: false });
+    store.flush();
   }
 
   /** The parsed notes, for the next scan to start from. */
   get cache(): Cache { return this.idx.notes; }
 
   /** Full scan. Files whose size and mtime match the cache are not re-read. */
-  async build(cache: Cache = new Map(), onProgress?: (done: number, total: number) => void, concurrency = 32): Promise<BuildStats> {
-    if (this.store) return this.buildInPlace(onProgress, concurrency);
+  async build(cache: Cache = new Map(), onProgress?: (done: number, total: number) => void): Promise<BuildStats> {
+    if (this.store) return this.check(onProgress);
     const t0 = Date.now();
-    const all = await this.fs.list();
-    const md = all.filter((f) => MD.test(f.path));
-    const other = all.filter((f) => !MD.test(f.path)).map((f) => f.path);
-    const notes: Note[] = new Array(md.length);
     const errors: string[] = [];
     const unsaved = new Map<string, Note | null>();
-    let reread = 0, done = 0, i = 0;
-    const work = async () => {
-      while (i < md.length) {
-        const k = i++, f = md[k];
+    const other: string[] = [];
+    const batches: Note[][] = []; // in the order walked, whichever batch is finished first
+    let files = 0, reread = 0, done = 0;
+    await this.scan(async (batch, read) => {
+      const notes: Note[] = [];
+      batches.push(notes);
+      files += batch.length;
+      const want: number[] = [];
+      batch.forEach((f, k) => {
+        if (!MD.test(f.path)) { other.push(f.path); return; }
         const c = cache.get(f.path);
-        if (c && c.size === f.size && c.mtime === f.mtime) notes[k] = c;
-        else {
-          try {
-            unsaved.set(f.path, notes[k] = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime));
-            reread++;
-          } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
-        }
-        if (++done % 50 === 0) onProgress?.(done, md.length);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, md.length || 1) }, work));
-    const ok = notes.filter(Boolean);
-    this.idx = new VaultIndex();
-    this.idx.preferNearby = true;
-    this.idx.build(ok, other);
-    // Only the strong matches are shown, so the weaker lookup tables are not built.
-    this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats, sanitized: false });
-    this.fuzzyIdx = undefined; // made on first use, for this index (a database has its own)
+        if (c && c.size === f.size && c.mtime === f.mtime) { notes.push(c); done++; } else want.push(k);
+      });
+      const texts = await read(want);
+      want.forEach((k, j) => {
+        const f = batch[k];
+        done++;
+        try {
+          const note = toNote(parseNote(f.path, readable(texts[j])), f.size, f.mtime);
+          notes.push(note);
+          unsaved.set(f.path, note);
+          reread++;
+        } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
+      });
+      // The number of notes isn't known until the walk is over. A vault scanned before has about
+      // as many as last time; for a first scan there is nothing to count towards.
+      if (cache.size) onProgress?.(done, Math.max(done, cache.size));
+    });
+    const ok = batches.flat();
+    this.use(ok, other);
     for (const path of cache.keys()) if (!this.idx.notes.has(path)) unsaved.set(path, null);
     this.unsaved = unsaved;
-    this.texts.clear(); this.textChars = 0;
-    clearInterned();
-    onProgress?.(md.length, md.length);
-    return { notes: ok.length, files: all.length, reread, cached: ok.length - reread, errors, ms: Date.now() - t0 };
+    onProgress?.(done, done);
+    return { notes: ok.length, files, reread, cached: ok.length - reread, changed: true, errors, ms: Date.now() - t0 };
   }
 
   /**
-   * Full scan into an index kept in place: the index is its own cache. Notes whose size and time
-   * match are not read; changed ones are written as they are read, and what is gone is removed at
-   * the end. Queries during the scan see a mix of old and new notes, each one whole.
+   * Answer from the notes an earlier session left in the cache, before any file has been looked
+   * at. check() then brings the index up to date. Attachments aren't in the cache: a link to one
+   * counts as unresolved until then.
    */
-  private async buildInPlace(onProgress?: (done: number, total: number) => void, concurrency = 32): Promise<BuildStats> {
-    const t0 = Date.now();
-    const idx = this.store!;
-    // Before any note is written, so the matcher sees the ones added by this scan.
-    this.matcher ??= new RoamMatcher(idx, { dailyFormats: this.dailyFormats, sanitized: false });
-    const all = await this.fs.list();
-    const md = all.filter((f) => MD.test(f.path));
-    const errors: string[] = [];
-    let reread = 0, done = 0, i = 0, ok = 0;
-    let stamps: Map<string, { size: number; mtime: number }> | null = idx.stamps();
-    // Read notes are written in batches: a database call costs much more than a row.
-    let batch: Note[] = [];
-    const work = async () => {
-      while (i < md.length) {
-        const f = md[i++];
-        const c = stamps!.get(f.path);
-        if (c && c.size === f.size && c.mtime === f.mtime) ok++;
-        else {
-          try {
-            const text = await this.fs.readText(f.path); // before batch is read: it may be replaced meanwhile
-            batch.push(toNote(parseNote(f.path, text), f.size, f.mtime));
-            if (batch.length >= BATCH) { idx.upsertNotes(batch); batch = []; }
-            reread++; ok++;
-          } catch (e) { errors.push(`${f.path}: ${(e as Error).name}`); }
-        }
-        if (++done % 50 === 0) onProgress?.(done, md.length);
-      }
-    };
-    try {
-      await Promise.all(Array.from({ length: Math.min(concurrency, md.length || 1) }, work));
-      stamps = null;
-      idx.upsertNotes(batch); batch = [];
-      const seen = new Set<string>();
-      for (const f of all) {
-        seen.add(f.path);
-        if (!MD.test(f.path) && !idx.hasFile(f.path)) idx.addAttachment(f.path);
-      }
-      // A note that could not be read keeps what the index had for it, as a full scan in memory would not.
-      for (const p of idx.filePaths()) if (!seen.has(p)) idx.removeFile(p);
-    } finally { idx.flush(); }
+  adopt(cache: Cache) { this.use([...cache.values()], []); }
+
+  private use(notes: Note[], other: string[]) {
+    this.idx = new VaultIndex();
+    this.idx.preferNearby = true;
+    this.idx.build(notes, other);
+    // Only the strong matches are shown, so the weaker lookup tables are not built.
+    this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats, sanitized: false });
+    this.fuzzyIdx = undefined; // made on first use, for this index (a database has its own)
     this.texts.clear(); this.textChars = 0;
     clearInterned();
-    onProgress?.(md.length, md.length);
-    return { notes: ok, files: all.length, reread, cached: ok - reread, errors, ms: Date.now() - t0 };
+  }
+
+  /**
+   * Full scan into the index in use: only what differs on disk is changed in it, so a scan that
+   * finds nothing new costs the walk and little else. Queries meanwhile see a mix of old and new
+   * notes, each one whole. For an index kept across starts this is every scan, the first included.
+   */
+  async check(onProgress?: (done: number, total: number) => void): Promise<BuildStats> {
+    const t0 = Date.now();
+    const idx = this.idx;
+    const errors: string[] = [];
+    const before = idx.noteCount();
+    // Everything the index has. What the walk comes across is taken out: the rest is gone.
+    const left = idx.stamps();
+    let files = 0, reread = 0, done = 0, changed = false;
+    const empty = !left.size;
+    try {
+      if (empty) idx.bulk(true);
+      await this.scan(async (batch, read) => {
+        files += batch.length;
+        const want: number[] = [];
+        batch.forEach((f, k) => {
+          const c = left.get(f.path);
+          left.delete(f.path);
+          if (!MD.test(f.path)) { if (c === undefined) { idx.addAttachment(f.path); changed = true; } return; }
+          if (c && c.size === f.size && c.mtime === f.mtime) done++; else want.push(k);
+        });
+        const texts = await read(want);
+        const notes: Note[] = [];
+        want.forEach((k, j) => {
+          const f = batch[k];
+          done++;
+          this.forget(f.path);
+          try { notes.push(toNote(parseNote(f.path, readable(texts[j])), f.size, f.mtime)); }
+          catch (e) {
+            errors.push(`${f.path}: ${(e as Error).name}`);
+            // As after build(): a note that can't be read is not in the index.
+            if (idx.hasFile(f.path)) { idx.removeFile(f.path); this.save(f.path, null); changed = true; }
+          }
+        });
+        if (notes.length) {
+          idx.upsertNotes(notes); // the batch at once: a database call costs much more than a row
+          for (const n of notes) this.save(n.path, n);
+          reread += notes.length; changed = true;
+        }
+        // An index with nothing in it yet has no number of notes to count towards.
+        if (before) onProgress?.(done, Math.max(done, before));
+      });
+      for (const p of left.keys()) {
+        this.forget(p);
+        idx.removeFile(p);
+        if (MD.test(p)) this.save(p, null);
+        changed = true;
+      }
+    } finally {
+      idx.flush(); // a scan that stops part way keeps what it wrote
+      if (empty) idx.bulk(false);
+    }
+    clearInterned();
+    onProgress?.(done, done);
+    const notes = idx.noteCount();
+    return { notes, files, reread, cached: notes - reread, changed, errors, ms: Date.now() - t0 };
+  }
+
+  /** Note a change for the saved cache. An index kept across starts has saved it already. */
+  private save(path: string, note: Note | null) { if (!this.store) this.unsaved.set(path, note); }
+
+  private scan(each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void> {
+    return this.fs.scan ? this.fs.scan(each) : scanByList(this.fs, each);
   }
 
   /** Re-check specific paths after a watcher event. Returns true if anything changed. */
@@ -188,7 +239,7 @@ export class VaultEngine {
       const meta = await this.fs.stat(path).catch(() => null);
       const known = this.idx.hasFile(path);
       if (!meta) {
-        if (known) { this.idx.removeFile(path); if (MD.test(path)) this.unsaved.set(path, null); changed = true; }
+        if (known) { this.idx.removeFile(path); if (MD.test(path)) this.save(path, null); changed = true; }
         continue;
       }
       if (!MD.test(path)) { if (!known) { this.idx.addAttachment(path); changed = true; } continue; }
@@ -197,7 +248,7 @@ export class VaultEngine {
       try {
         const note = toNote(parseNote(path, await this.fs.readText(path)), meta.size, meta.mtime);
         this.idx.upsertNote(note);
-        this.unsaved.set(path, note);
+        this.save(path, note);
         changed = true;
       } catch { /* half-written or placeholder file: the next event will retry */ }
     }
@@ -234,7 +285,7 @@ export class VaultEngine {
         clear.add(dir);
       } catch (e) {
         if ((e as Error)?.name === 'NotFoundError') clear.add(dir);
-        else for (const p of this.idx.filePaths()) if (p.startsWith(dir + '/')) recheck.push(p);
+        else for (const p of this.idx.pathsIn(dir)) recheck.push(p);
       }
     }
     // An index kept in place moves a note that is unchanged at its new path (keeping what it
@@ -244,11 +295,11 @@ export class VaultEngine {
       if (f && n.size === f.size && n.mtime === f.mtime && !this.idx.hasFile(to) && this.idx.moveNote(n.path, to)) changed = true;
     }
     // What the index has in those folders and is no longer there.
-    for (const p of this.idx.filePaths()) {
-      if (seen.has(p) || !inFolder(p, clear)) continue;
+    for (const dir of outermost([...clear])) for (const p of this.idx.pathsIn(dir)) {
+      if (seen.has(p)) continue;
       this.forget(p);
       this.idx.removeFile(p);
-      if (MD.test(p)) this.unsaved.set(p, null);
+      if (MD.test(p)) this.save(p, null);
       changed = true;
     }
     const toRead: FileMeta[] = [];
@@ -264,7 +315,7 @@ export class VaultEngine {
       if (!c || c.size !== f.size || c.mtime !== f.mtime) { toRead.push(f); continue; }
       const note = { ...c, path: f.path };
       this.idx.upsertNote(note);
-      this.unsaved.set(f.path, note);
+      this.save(f.path, note);
       changed = true;
     }
     let i = 0;
@@ -275,7 +326,7 @@ export class VaultEngine {
         try {
           const note = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime);
           this.idx.upsertNote(note);
-          this.unsaved.set(f.path, note);
+          this.save(f.path, note);
           changed = true;
         } catch { /* half-written or placeholder file: the next event will retry */ }
       }
@@ -355,6 +406,26 @@ export class VaultEngine {
   private forget(path: string) {
     const t = this.texts.get(path);
     if (t !== undefined) { this.texts.delete(path); this.textChars -= t.length; }
+  }
+}
+
+function readable(text: string | null | undefined): string {
+  if (text == null) throw new DOMException('unreadable', 'NotReadableError');
+  return text;
+}
+
+/** scan() for a file system that has none: list everything, then read what is asked for. */
+export async function scanByList(fs: VaultFS, each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void> {
+  const all = await fs.list();
+  for (let i = 0; i < all.length; i += SCAN_BATCH) {
+    const batch = all.slice(i, i + SCAN_BATCH);
+    await each(batch, async (want) => {
+      const texts: (string | null)[] = [];
+      for (let k = 0; k < want.length; k += READS_AT_ONCE) {
+        texts.push(...await Promise.all(want.slice(k, k + READS_AT_ONCE).map((w) => fs.readText(batch[w].path).catch(() => null))));
+      }
+      return texts;
+    });
   }
 }
 

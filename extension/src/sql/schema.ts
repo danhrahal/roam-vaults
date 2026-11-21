@@ -38,6 +38,17 @@ export const MIGRATIONS: ((db: Db) => void)[] = [
   },
 ];
 
+/**
+ * The indexes only lookups need, as the steps above made them. A scan into an empty database drops
+ * them and makes them again at the end (SqlIndex.bulk): building one in a go takes far less than
+ * keeping it up to date row by row.
+ */
+export const LOOKUP_INDEXES: [name: string, on: string][] = [
+  ['files_name', 'files(name)'],
+  ['link_names_name', 'link_names(name)'],
+  ['note_keys_note', 'note_keys(note)'],
+];
+
 export function migrate(db: Db & { selectValue(sql: string): unknown }) {
   const at = Number(db.selectValue('PRAGMA user_version'));
   for (let v = at; v < MIGRATIONS.length; v++) {

@@ -2,7 +2,7 @@
 // date, and answer "what in the vault relates to this Roam page?". No DOM, no Node
 // APIs, so it runs in the Web Worker and in Node tests alike.
 import { parseNote, clearInterned } from './core/parser.ts';
-import { VaultIndex, toNote } from './core/vault-index.ts';
+import { VaultIndex, toNote, type Stamp } from './core/vault-index.ts';
 import { RoamMatcher, type NoteHow } from './core/matcher.ts';
 import { FuzzyIndex, NAME } from './core/fuzzy-index.ts';
 import { diffMarks } from './core/fuzzy.ts';
@@ -169,18 +169,21 @@ export class VaultEngine {
     const idx = this.idx;
     const errors: string[] = [];
     const before = idx.noteCount();
-    // Everything the index has. What the walk comes across is taken out: the rest is gone.
-    const left = idx.stamps();
+    // Everything the index has: what the walk comes across is taken out, and the rest is gone. A
+    // database takes a moment to list it, so it is asked when the walk's first files come in, after
+    // the pages that were waiting for this vault have had their answers.
+    let left: Map<string, Stamp | null> | undefined;
     let files = 0, reread = 0, done = 0, changed = false;
-    const empty = !left.size;
+    const empty = idx.isEmpty();
     try {
       if (empty) idx.bulk(true);
       await this.scan(async (batch, read) => {
         files += batch.length;
         const want: number[] = [];
+        const had = left ??= idx.stamps();
         batch.forEach((f, k) => {
-          const c = left.get(f.path);
-          left.delete(f.path);
+          const c = had.get(f.path);
+          had.delete(f.path);
           if (!MD.test(f.path)) { if (c === undefined) { idx.addAttachment(f.path); changed = true; } return; }
           if (c && c.size === f.size && c.mtime === f.mtime) done++; else want.push(k);
         });
@@ -205,7 +208,7 @@ export class VaultEngine {
         // An index with nothing in it yet has no number of notes to count towards.
         if (before) onProgress?.(done, Math.max(done, before));
       });
-      for (const p of left.keys()) {
+      for (const p of (left ?? idx.stamps()).keys()) {
         this.forget(p);
         idx.removeFile(p);
         if (MD.test(p)) this.save(p, null);

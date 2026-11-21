@@ -150,6 +150,28 @@ test('a second scan of an unchanged vault reads nothing', async () => {
   assert.equal(fs.reads(), reads);
 });
 
+test('a vault that lost every file is emptied, and filled again by the next scan', async () => {
+  const { files, titles } = gen(120, 5);
+  const fs = memFS(files);
+  const { mem, sql } = await both(fs);
+  const indexes = () => (sql.idx as SqlIndex).db.selectValues("SELECT name FROM sqlite_schema WHERE type = 'index' AND name IN ('files_name', 'link_names_name', 'note_keys_note') ORDER BY name");
+  // The indexes a first scan does without are back once it is done.
+  assert.deepEqual(indexes(), ['files_name', 'link_names_name', 'note_keys_note']);
+  for (const p of Object.keys(files)) fs.rm(p);
+  const gone = await sql.build();
+  await mem.build();
+  assert.equal(gone.notes, 0);
+  assert.equal(gone.changed, true);
+  assert.equal(sql.idx.isEmpty(), true);
+  await same(mem, sql, titles);
+  for (const [p, t] of Object.entries(files)) fs.write(p, t);
+  const back = await sql.build();
+  await mem.build();
+  assert.equal(back.reread, back.notes);
+  assert.deepEqual(indexes(), ['files_name', 'link_names_name', 'note_keys_note']);
+  await same(mem, sql, titles);
+});
+
 test('the daily format can change between scans', async () => {
   const fs = memFS({ 'J/09-11-2026.md': 'x', '2026-11-09.md': 'y' });
   const { db } = await openDb('fmt');

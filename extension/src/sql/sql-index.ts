@@ -41,18 +41,22 @@ export class SqlIndex extends VaultIndex {
   override bulk(on: boolean) {
     this.flush();
     this.db.exec(`PRAGMA cache_size = ${on ? -BULK_CACHE_KB : -CACHE_KB}`);
-    if (on) for (const [name] of LOOKUP_INDEXES) this.db.exec(`DROP INDEX IF EXISTS ${name}`);
-    else {
-      // Making an index sorts its rows. In memory that takes as much room as the index, from a
-      // WebAssembly heap that never gives room back: through temporary files (in the pool, for a
-      // database on disk) the sort holds no more than the page cache does.
-      const make = () => { for (const [name, cols] of LOOKUP_INDEXES) this.db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${cols}`); };
+    if (on) {
+      for (const [name] of LOOKUP_INDEXES) this.db.exec(`DROP INDEX IF EXISTS ${name}`);
+      this.fuzzyTitles.bulk(true);
+    } else {
+      // Making an index sorts its rows, and so does filling the similar-name tables. In memory that
+      // takes as much room as what is made, from a WebAssembly heap that never gives room back:
+      // through temporary files (in the pool, for a database on disk) a sort holds no more than
+      // the page cache does.
+      const make = () => {
+        for (const [name, cols] of LOOKUP_INDEXES) this.db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${cols}`);
+        this.fuzzyTitles.bulk(false);
+      };
       try { this.db.exec('PRAGMA temp_store = FILE'); make(); }
       catch { this.db.exec('PRAGMA temp_store = MEMORY'); make(); } // no room for a temporary file
       finally { this.db.exec('PRAGMA temp_store = MEMORY; PRAGMA shrink_memory'); }
     }
-    this.fuzzyTitles.bulk(on);
-    if (!on) this.db.exec('PRAGMA shrink_memory');
   }
 
   // ---------- statements ----------

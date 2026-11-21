@@ -53,13 +53,16 @@ const TRIGGERS: [name: string, sql: string][] = [
     END;`],
 ];
 const GRAM_TRIGGER = TRIGGERS[2][1];
-/** Every key's trigrams, and how many keys have each. The positions in a key come from a table:
- *  a recursive query joined to every key, with the rows put in order first, took three times as long. */
+/** Every key's trigrams, and how many keys have each. The positions in a key come from a table.
+ *  The trigrams go in sorted: unsorted, each one lands on some other page of the table, and for a
+ *  table on disk that is larger than the page cache every one of them is a read and a write (a
+ *  first scan of 100,000 notes took 12 s longer in Roam). The sort is the caller's to place:
+ *  SqlIndex.bulk runs this while sorts go through temporary files. */
 const ALL_TRIGRAMS = `
   CREATE TEMP TABLE fuzzy_pos(n INTEGER PRIMARY KEY);
   WITH RECURSIVE i(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM i WHERE n < (SELECT coalesce(max(length(z)), 0) - 2 FROM fuzzy_name))
     INSERT INTO fuzzy_pos SELECT n FROM i;
-  INSERT OR IGNORE INTO fuzzy_tri(g, id) SELECT substr(f.z, p.n, 3), f.id FROM fuzzy_name f JOIN fuzzy_pos p ON p.n <= length(f.z) - 2;
+  INSERT OR IGNORE INTO fuzzy_tri(g, id) SELECT substr(f.z, p.n, 3), f.id FROM fuzzy_name f JOIN fuzzy_pos p ON p.n <= length(f.z) - 2 ORDER BY 1, 2;
   DROP TABLE fuzzy_pos;
   INSERT INTO fuzzy_gram(g, n) SELECT g, count(*) FROM fuzzy_tri GROUP BY g;`;
 

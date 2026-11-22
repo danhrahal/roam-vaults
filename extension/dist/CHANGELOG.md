@@ -11,6 +11,10 @@
   instead of in memory, so a large vault takes much less memory while Roam is open. A first scan takes
   longer. The index is built again by the first scan after this update. Removing a vault deletes its
   database.
+- **Reference counts**, a new switch in Settings → Roam Depot → Vaults, off until you turn it on. It adds
+  a line under the page title that shows how many Linked, Unlinked and External Vault References the page
+  has, in that order, so you can see what's further down without scrolling. Click a count to jump to that
+  section. Counts of zero are left out, and nothing shows while no vault is connected.
 - A page with thousands of vault notes to list (one named like a common tag, for example) no longer
   holds Roam up while they are all drawn. The first notes are drawn, and the rest as the page is scrolled.
 - Scanning a large vault uses much less memory at its peak, on Rescan most of all. The files are walked

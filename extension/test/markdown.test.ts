@@ -18,7 +18,7 @@ const shape = (text: string, line?: number) =>
   (renderMarkdown(text, line) as unknown as El).kids.map((k) => { const e = k as El; return `${e.tag}${e.className ? '.' + e.className : ''}:${e.textContent}`; });
 
 const note = ['---', 'aliases: [Alpha]', '---', '# Title', '- item one', '- [x] done', '> quoted', 'plain [[Link]] text', '```', 'code', '```'];
-const want = ['div.rv-props:aliases: [Alpha]', 'h2:Title', 'div.rv-li:item one', 'div.rv-li:\u2611 done', 'blockquote:quoted', 'p:plain [[Link]] text', 'pre:code'];
+const want = ['div.rv-props:aliases: [Alpha]', 'h2:Title', 'div.rv-li:item one', 'div.rv-li: done', 'blockquote:quoted', 'p:plain [[Link]] text', 'pre:code'];
 
 test('headings, lists, quotes and code render from a note with Unix line endings', () => {
   assert.deepEqual(shape(note.join('\n')), want);

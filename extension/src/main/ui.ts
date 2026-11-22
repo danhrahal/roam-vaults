@@ -2,6 +2,7 @@
 // Plain DOM with Blueprint 3 class names (Roam ships Blueprint), so no bundled UI library.
 import type { PageResult, Backlink } from '../engine.ts';
 import { renderMarkdown, inline } from './markdown.ts';
+import { contextOf, kidsAt, type OutlineBlock, type LineContext } from '../core/outline.ts';
 
 export const ATTR = 'data-roam-vaults';
 
@@ -19,30 +20,19 @@ const STYLES = `
 .rv-spacer{flex:1}
 .rv-sec.rv-collapsed .rv-sec-body{display:none}
 .rv-sec-body{margin-top:4px}
-.rv-group{margin-bottom:10px}
 .rv-more{height:1px}
-.rv-group-head{align-items:center;gap:2px;flex-wrap:wrap}
-.rv-group-caret{cursor:pointer}
 .rv-group-title{margin-right:8px}
-.rv-note{cursor:pointer;color:rgb(51,122,183);font-size:16px;line-height:24px}
-.rv-note:hover{text-decoration:underline}
-.rv-fuzzy .rv-note{color:rgba(51,122,183,.55)}
+.rv-fuzzy .rv-note{opacity:.55}
 .rv-fuzzy .rv-group-caret{opacity:.55}
 .rv-note .rm-highlight{margin:0;padding:0}
 .rv-vault{color:#8a9ba8}
-.rv-panel .rv-wl,.rv-viewer .rv-wl{color:rgb(16,107,163);cursor:pointer}
-.rv-panel .rv-wl:hover,.rv-viewer .rv-wl:hover,.rv-panel .rv-tag:hover,.rv-viewer .rv-tag:hover{text-decoration:underline}
-.rv-br{color:rgb(167,182,194)}
-.rv-panel .rv-tag,.rv-viewer .rv-tag,.rv-tagref{color:rgb(167,182,194);cursor:pointer}
-.rv-tagref{font-size:14px;margin-right:8px}
-.bp3-dark .rv-panel .rv-wl,.bp3-dark .rv-viewer .rv-wl{color:rgb(72,175,240)}
-.rv-content{margin-left:20px}
-.rv-block{display:flex;align-items:flex-start;cursor:pointer}
-.rv-bullet{flex:0 0 auto;width:20px;height:28px;display:flex;align-items:center;justify-content:center}
-.rv-bullet::before{content:'';width:6px;height:6px;border-radius:50%;background:rgb(57,75,89)}
-.rv-block-text{flex:1;font-size:14px;line-height:21px;padding:4px 0;margin-top:-1px;color:rgb(32,43,51);white-space:pre-wrap;word-break:break-word}
-.bp3-dark .rv-block-text{color:inherit}
-.rv-block-text code{font-size:12px}
+.rv-tagref{color:rgb(167,182,194);font-size:14px;margin-right:8px}
+.rv-content{margin-left:4px}
+.rv-panel .rm-block-text{cursor:pointer}
+.rv-panel .rm-block-main:hover>.controls .rv-kids-caret{opacity:.7}
+.rv-checkbox{pointer-events:none}
+.rv-viewer [data-rv-target]{cursor:pointer}
+.rv-viewer .rm-page-ref--link:hover,.rv-viewer .rm-page-ref--tag:hover{text-decoration:underline}
 .rv-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:30000;max-width:560px;padding:10px 14px;border-radius:6px;background:#30404d;color:#fff;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .rv-toast.rv-error{background:#a82a2a}
 .rv-overlay{position:fixed;inset:0;z-index:20000;background:rgba(16,22,26,.45);display:flex;align-items:center;justify-content:center}
@@ -57,7 +47,7 @@ const STYLES = `
 .rv-viewer-body code{background:#f5f8fa;padding:0 3px;border-radius:3px;font-size:12px}
 .rv-viewer-body .rv-li{padding-left:calc(var(--d,0) * 18px + 14px);position:relative}
 .rv-viewer-body .rv-li::before{content:'•';position:absolute;left:calc(var(--d,0) * 18px + 2px);color:#8a8a99}
-.rv-viewer-body .rv-wl.rv-missing{color:#8a8a99;cursor:default}
+.rv-viewer-body .rv-missing,.rv-viewer-body .rv-missing .rm-page-ref{color:#8a8a99;cursor:default}
 .rv-viewer-body .rv-props{font-size:12px;color:#5c7080;background:#f5f8fa;border-radius:4px;padding:6px 10px;margin:8px 0}
 .rv-viewer-body .rv-hl{background:#fff3b0;border-radius:3px}
 .rv-viewer-body blockquote{border-left:3px solid #d8e1e8;margin:4px 0;padding-left:10px;color:#5c7080}
@@ -129,6 +119,9 @@ export interface SectionActions {
   resolve(target: string, from: string): Promise<string | null>;
   /** Read the lines of linking notes that came without their text (`unread`), and put it in them. */
   lines(notes: Backlink[]): Promise<void>;
+  /** A click on a link in a line: open the page it names in Roam, in the sidebar with shift held.
+   *  False when the graph has no such page. */
+  go(title: string, sidebar: boolean): boolean;
 }
 export interface PanelVault { id: string; name: string; state: SectionState; act: SectionActions }
 
@@ -211,12 +204,12 @@ function sectionHead(label: string, open = true, tools: HTMLElement[] = []) {
 /** Notes from every ready vault: the notes that are this page first, then notes linking here,
  *  then notes only tagged here. With more than one vault, each title starts with its vault name. */
 function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[], showVault: boolean): HTMLElement {
-  const out = h('div', { class: 'rv-groups' });
+  const out = h('div', { class: 'rv-groups rm-mentions refs-by-page-view' }); // Roam's own list classes: its style sheet lays the groups out
   /** One note: caret + (vault/)path as a namespaced title (+ tag); content shows when open. The open-in-editor button lives in the viewer. */
   const group = (v: PanelVault, key: string, path: string, defOpen: boolean, tag: string | undefined, content: () => HTMLElement, cls = '', marks: number[] = []) => {
     const k = `${v.id}\n${key}\n${path}`;
     const box = h('div', { class: 'rv-content' });
-    const c = caret(false, 'rm-caret-showing rv-group-caret');
+    const c = caret(false, 'rm-caret-showing rv-group-caret dont-focus-block');
     const set = (open: boolean) => {
       c.classList.toggle('rm-caret-open', open); c.classList.toggle('rm-caret-closed', !open);
       box.hidden = !open;
@@ -229,11 +222,15 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
       set(open);
     });
     set(groupOpen.get(k) ?? defOpen);
-    return h('div', { class: 'rv-group' + cls },
-      h('div', { class: 'flex-h-box rv-group-head' }, c,
+    // The folders a note is in, in the grey a vault's name has, so the title reads as the note's name.
+    const name = path.lastIndexOf('/') + 1;
+    return h('div', { class: 'rm-ref-page-view rv-group' + cls },
+      h('div', { class: 'flex-h-box rm-title-arrow-wrapper rv-group-head' }, c,
         h('div', { class: 'rm-ref-page-view-title rv-group-title' },
-          h('span', { class: 'rv-note', title: `${v.name}/${path}`, onclick: () => v.act.view(path) },
-            showVault ? h('span', { class: 'rv-vault' }, `${v.name}/`) : null, ...marked(path.replace(/\.md$/i, ''), path.lastIndexOf('/') + 1, marks))),
+          h('a', { onclick: () => v.act.view(path) },
+            h('span', { class: 'rm-page__title rv-note', style: 'cursor: pointer; text-decoration: none;' },
+              showVault || name ? h('span', { class: 'rv-vault' }, (showVault ? `${v.name}/` : '') + path.slice(0, name)) : null,
+              ...marked(path.slice(name).replace(/\.md$/i, ''), 0, marks)))),
         tag ? h('span', { class: 'rv-tagref' }, `#${tag}`) : null),
       box);
   };
@@ -259,7 +256,9 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
     if (b.unread) unread.set(rows.length, { v, b });
     rows.push(() => group(v, 'links', b.path, true, tag, () => {
       const box = h('div', {});
-      const draw = () => box.replaceChildren(...b.lines.map((l) => blockEl(l.text, () => v.act.view(b.path, l.line))));
+      // Two links in one block are one reference, as in Roam.
+      const draw = () => box.replaceChildren(...b.lines.filter((l, i) => !b.lines.slice(0, i).some((x) => (x.at ?? x.line) === (l.at ?? l.line)))
+        .map((l) => referenceEl({ text: l.text, line: l.at ?? l.line, up: l.up ?? [], kids: l.kids ?? [], cut: l.cut }, b.path, v.act)));
       draw();
       // Its lines are read before it is drawn (see `ahead`); if that failed, they are filled in here.
       if (b.unread) v.act.lines([b]).then(draw, () => {});
@@ -330,11 +329,81 @@ function marked(text: string, from: number, marks: number[]): (string | HTMLElem
   return out;
 }
 
-/** A linking line, drawn like a Roam block (bullet + text). Click opens the note at that line. */
-function blockEl(text: string, onclick: () => void) {
-  const t = h('div', { class: 'rv-block-text' });
-  inline(t, text);
-  return h('div', { class: 'rv-block rm-reference-item', onclick }, h('span', { class: 'rv-bullet' }), t);
+// A reference is drawn with the elements and class names of Roam's own Linked References (measured
+// in Roam, 2026-11-22): the grey box, the path of parent blocks, the block with its bullet, and its
+// children under it. Roam's style sheet does the rest, and so does a theme.
+
+/** One reference: a block of a note with the blocks above it as a path. A click on a part of the
+ *  path shows that block in its place, with everything under it, as in Roam. */
+function referenceEl(block: LineContext, path: string, act: SectionActions): HTMLElement {
+  const inner = h('div', {});
+  const show = (b: LineContext) => {
+    const zoom = h('div', { class: 'rm-zoom zoom-mentions-view' }, ...b.up.map((u, i) => {
+      const text = h('span', {});
+      inline(text, u.text.split('\n')[0].replace(/^#{1,6}\s+/, ''));
+      return h('div', { class: 'rm-zoom-item', onclick: async (e: MouseEvent) => {
+        if (linkClick(e, path, act)) return;
+        try { show(contextOf(await act.read(path), [u.line])[0]); } catch { /* the note is gone: the panel is drawn again when the vault notices */ }
+      } },
+        h('span', { class: 'rm-zoom-item-content' }, h('div', { class: 'parent-path-wrapper' }, text)),
+        i < b.up.length - 1 ? h('span', { class: 'bp3-icon-standard bp3-icon-chevron-right rm-mention-icon' }) : null);
+    }));
+    inner.replaceChildren(zoom, blockEl(b, 1, path, act));
+  };
+  show(block);
+  return h('div', { class: 'flex-h-box flex-align-start' }, h('div', { class: 'rm-reference-item dont-focus-block' }, inner));
+}
+
+/** A block as Roam draws one: caret (when it has children), bullet, text, and its children nested
+ *  under it. A click on the bullet or the text opens the note at that line. */
+function blockEl(b: OutlineBlock, level: number, path: string, act: SectionActions): HTMLElement {
+  const heading = /^(#{1,6})\s+/.exec(b.text);
+  const text = h('span', {});
+  inline(text, heading ? b.text.slice(heading[0].length) : b.text);
+  const has = b.kids.length > 0 || !!b.cut;
+  let open = false; // as in Roam's Linked References: a reference's children show when asked for
+  const kidsBox = h('div', { class: `rm-block-children rm-block__children rm-level-${level + 1}` });
+  const c = h('span', { class: `bp3-icon-standard bp3-icon-caret-down rm-caret rm-caret-hidden${has ? ' rv-kids-caret' : ''}` });
+  const bullet = h('span', { class: 'rm-bullet', onclick: () => act.view(path, b.line) },
+    h('span', { class: 'bp3-popover-wrapper' }, h('span', { class: 'bp3-popover-target' }, h('span', { class: 'rm-bullet__inner' })))); // Roam's wrappers: they set the line the dot sits on
+  const box = h('div', { class: 'roam-block-container rm-block rm-not-focused block-bullet-view' + (heading ? ` rm-heading-level-${Math.min(heading[1].length, 3)}` : '') },
+    h('div', { class: 'rm-block-main rm-block__self' },
+      h('div', { class: 'controls rm-block__controls noselect' }, h('span', { class: 'block-expand' }, c), bullet),
+      h('div', { class: 'rm-block__input rm-block__input--view roam-block dont-unfocus-block hoverparent rm-block-text',
+        onclick: (e: MouseEvent) => { if (!linkClick(e, path, act) && !getSelection()?.toString()) act.view(path, b.line); } }, text),
+      h('div', { class: 'rm-block-separator' }),
+      h('div', { style: 'min-width: 24px;' })),
+    kidsBox);
+  let kids = b.kids, whole = !b.cut;
+  const set = async () => {
+    box.classList.toggle('rm-block--open', open || !has); box.classList.toggle('rm-block--closed', has && !open);
+    c.classList.toggle('rm-caret-open', open); c.classList.toggle('rm-caret-closed', !open);
+    bullet.classList.toggle('rm-bullet--closed', has && !open);
+    if (!open) { kidsBox.replaceChildren(bar()); return; }
+    if (!whole) { try { kids = kidsAt(await act.read(path), b.line); whole = true; } catch { /* drawn with what came */ } }
+    kidsBox.replaceChildren(bar(), ...kids.map((k) => blockEl(k, level + 1, path, act)));
+  };
+  const toggle = (e: Event) => { e.stopPropagation(); if (has) { open = !open; set(); } };
+  const bar = () => h('div', { class: 'rm-multibar', onclick: toggle });
+  c.addEventListener('click', toggle);
+  set();
+  return box;
+}
+
+/** A click that landed on a link in a line: the page it names opens in Roam (in the sidebar with
+ *  shift held); when the graph has no such page, the note it names opens in the viewer. Returns
+ *  whether the click was on a link. */
+function linkClick(e: MouseEvent, from: string, act: SectionActions): boolean {
+  const t = e.target as Element;
+  if (t.closest?.('a[href]')) { e.stopPropagation(); return true; } // a web link: the browser opens it
+  const a = t.closest?.<HTMLElement>('[data-rv-target]');
+  if (!a) return false;
+  e.stopPropagation(); e.preventDefault();
+  const target = a.dataset.rvTarget!;
+  const name = target.slice(target.lastIndexOf('/') + 1).replace(/\.md$/i, '');
+  if (act.go(target, e.shiftKey) || (name !== target && act.go(name, e.shiftKey))) return true;
+  act.resolve(target, from).then((to) => { if (to) act.view(to); }, () => {});
+  return true;
 }
 
 async function loadPreview(el: HTMLElement, path: string, act: SectionActions) {
@@ -348,10 +417,10 @@ async function loadPreview(el: HTMLElement, path: string, act: SectionActions) {
 
 /** Make [[links]] in rendered note text open their target note (in the viewer). */
 function wireLinks(el: HTMLElement, from: string, open: (to: string) => void, resolve: (t: string, f: string) => Promise<string | null>) {
-  el.querySelectorAll<HTMLElement>('.rv-wl[data-target]').forEach((a) => {
+  el.querySelectorAll<HTMLElement>('[data-rv-target]').forEach((a) => {
     a.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const to = await resolve(a.dataset.target!, from);
+      const to = await resolve(a.dataset.rvTarget!, from);
       if (to) open(to); else a.classList.add('rv-missing');
     });
   });

@@ -161,7 +161,7 @@ async function main() {
   await roam.page.locator('.roam-article .rv-group-caret').first().click();
 
   // 4. The note viewer, opened from a line, with that line marked.
-  await roam.page.locator('.roam-article .rv-block', { hasText: 'Showed up on the' }).click();
+  await roam.page.locator('.roam-article .rv-panel .rm-block-text', { hasText: 'Showed up on the' }).click();
   await waitFor('the note viewer', () => evalIn(() => !!document.querySelector('.rv-viewer .rv-hl')), 10000);
   await sleep(500);
   await snap('note-viewer', await boxOf('.rv-viewer', 40));

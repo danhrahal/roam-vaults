@@ -107,6 +107,28 @@ export async function killRoam(signal = 'SIGKILL', grace = 15000) {
   await sleep(1000);
   return signal !== 'SIGKILL' && left.length > 0;
 }
+/** A second Roam window on the page the first one shows, or null if this Roam opens none. */
+export async function secondWindow() {
+  const ctx = roam.browser.contexts()[0];
+  const before = new Set(ctx.pages());
+  const opened = () => ctx.pages().find((p) => !before.has(p) && p.url().includes('roamresearch.com') && !p.url().includes('sw.js')) ?? null;
+  await evalIn(() => { window.open(location.href); }).catch(() => {});
+  let page = null;
+  for (let i = 0; i < 20 && !(page = opened()); i++) await sleep(500);
+  if (!page) {
+    // not through the page: ask the app for a window
+    page = await ctx.newPage().catch(() => null);
+    if (page && !(await page.goto(roam.page.url()).then(() => true, () => false))) { await page.close().catch(() => {}); page = null; }
+  }
+  page?.on('console', (m) => { if (m.text().includes('[roam-vaults]')) log('[second window]', m.text().slice(0, 300)); });
+  return page;
+}
+/** Closes a window secondWindow() opened. False if it is still there. */
+export async function closeWindow(page) {
+  await page.close().catch(() => {});
+  for (let i = 0; i < 10 && !page.isClosed(); i++) { await page.evaluate(() => window.close()).catch(() => {}); await sleep(500); }
+  return page.isClosed();
+}
 export async function waitFor(label, fn, timeout = 30000, every = 250) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeout) {

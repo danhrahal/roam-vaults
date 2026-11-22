@@ -101,8 +101,17 @@ backlog); its code is in commit 1b8305b.
   once (`compileSqlite` in `main/index.ts`) and hands the compiled module to each vault's worker in `open`.
   If that fails, the worker uses the in-memory index.
 - Each vault has its own database in the origin private file system, in `.roam-vaults/<poolName(id)>`, through
-  the `opfs-sahpool` VFS (`sql/db.ts`). A pool can be open in one worker at a time: a second Roam window on the
-  same vault gets a database in memory instead. Removing a vault deletes its folder.
+  the `opfs-sahpool` VFS (`sql/db.ts`). Removing a vault deletes its folder.
+- A pool can be open in one worker at a time, so a vault open in several Roam windows or tabs is opened by
+  one indexer, and the others ask that one (`share.ts`). The first to take the vault's Web Lock has it: it
+  opens the database, watches and scans as usual, and sends every status and change over a BroadcastChannel
+  too. The others open nothing and read no files; they pass `query`, `lines`, `read`, `resolve` and `rescan`
+  on and hand the answers to their pages, and their status messages carry `follower`, so their pages leave
+  the scan mark to the window that scans. Each waits in line for the lock: when the window that has the
+  vault closes, the next one opens the database and carries on. A window whose vault of that name is another
+  folder (`same`), or one whose worker can't get the database for another reason, falls back to a database
+  in memory, which costs memory and reads the whole vault. `test/share.test.ts` and the two-window block of
+  `test/browser-smoke.mjs` cover it.
 - The tables are in `sql/schema.ts`: add a step at the end of `MIGRATIONS`. Step 2 adds the similar-name
   tables (`sql/fuzzy.ts`), which `SqlIndex` writes with each batch of notes. `SqlIndex` (`sql/sql-index.ts`)
   overrides the lookups `VaultIndex` makes (`pathsNamed`, `eachLinker`, `aliasPaths`, ...), so link resolution

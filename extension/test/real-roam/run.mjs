@@ -17,7 +17,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { genVault } from './genvault.mjs';
 import {
-  roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, shot, signIn, openGraph,
+  roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, shot, signIn, openGraph, secondWindow, closeWindow,
   dismissDialogs, openPage, openSettings, clickLeaf, loadDevExtension, vaultRows, statusOf, clickButton, addVault,
   clearExtensionState, scanMarked, touchAll, panelText,
 } from './roam.mjs';
@@ -163,6 +163,28 @@ async function main() {
     } catch { /* none */ }
     return false;
   }));
+
+  // a second Roam window on the same graph and page: it shows the vault from the first window's index
+  const second = await secondWindow();
+  if (!second) log('second window: this Roam opened none, so sharing a vault between windows was not checked here');
+  else {
+    const text2 = () => second.evaluate(() => document.querySelector('.roam-article .rv-panel')?.innerText ?? '').catch(() => '');
+    const shows = await waitFor('the vault panel in the second window', async () => (await text2()).includes('backlink line'), 90000, 500).then(() => true, () => false);
+    check("A second Roam window shows the vault's notes", shows, (await text2()).split('\n')[0]);
+    const locks = await second.evaluate(async () => {
+      const l = await navigator.locks.query(), ours = (x) => x.name.startsWith('roam-vaults:');
+      return `${l.held.filter(ours).length} has the vault, ${l.pending.filter(ours).length} waits for it`;
+    }).catch((e) => e.message);
+    check("…from the first window's index, without reading the vault again", locks === '1 has the vault, 1 waits for it', locks);
+    const note = path.join(small, 'Two windows note.md');
+    fs.writeFileSync(note, `Written with two windows open, links [[${TEST_PAGE}]].\n`);
+    const both = await waitFor('the new note in both windows', async () => (await panelText()).includes('Two windows note') && (await text2()).includes('Two windows note'), 20000).then(() => true, () => false);
+    check('A note added on disk shows up in both windows', both);
+    if (shows) await second.screenshot({ path: path.join(OUT, 'second-window.png') }).catch(() => {}); // only with the graph open in it
+    fs.rmSync(note);
+    if (!(await closeWindow(second))) throw new Error('the second Roam window did not close');
+    await waitFor('the note to go from the page', async () => !(await panelText()).includes('Two windows note'), 15000).catch(() => {});
+  }
 
   // large vault: memory
   await addVault(big);

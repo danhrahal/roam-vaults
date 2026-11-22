@@ -4,7 +4,8 @@
 // the page from bytes inlined in extension.js (Roam Depot allows no code from the network) and
 // handed to each worker. The database lives in the origin private file system through the
 // "opfs-sahpool" VFS: one pool per vault, in its own folder, so vaults never share a lock. A pool
-// can be held by one worker at a time, so a second Roam window open on the same vault gets a
+// can be held by one worker at a time, so of the Roam windows open on a vault one indexer opens it
+// and the others ask that one (share.ts). A worker that can't get the pool all the same gets a
 // database in memory instead (persistent: false), which costs memory and starts from a full read.
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 import { migrate } from './schema.ts';
@@ -32,7 +33,7 @@ export async function openDb(key: string, wasm?: WebAssembly.Module): Promise<Op
   let db: any = null, persistent = false, why = '';
   if (sqlite3.installOpfsSAHPoolVfs) {
     // The pool's files can be held for a moment by a worker that is going away (the extension was
-    // just reloaded), or for good by another Roam window: try a few times, then do without.
+    // just reloaded, or the window that had the vault closed): try a few times, then do without.
     const name = poolName(key);
     for (let attempt = 0; attempt < 4 && !db; attempt++) {
       if (attempt) await new Promise((r) => setTimeout(r, 250 * attempt));

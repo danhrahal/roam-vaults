@@ -3,7 +3,7 @@
 //
 // The same file is also the walker: for every full scan the indexer starts a second worker from
 // its own URL and hands it the vault (see walker.ts for why).
-import { VaultEngine, LINES_AT_FIRST, inFolder, scanByList, type VaultFS, type FileMeta, type Cache, type ReadBatch } from './engine.ts';
+import { VaultEngine, LINES_AT_FIRST, inFolder, scanByList, type VaultFS, type FileMeta, type Cache, type ReadBatch, type BuildStats } from './engine.ts';
 import { walk, madeHandles, textOf, obsidianFilters } from './walk.ts';
 import { runWalker, type FromWalker, type ToWalker } from './walker.ts';
 import { readNotes, writeNotes, deleteNotes } from './cache-db.ts';
@@ -12,6 +12,8 @@ import { NONE } from './core/vault-index.ts';
 import { VaultIgnore, GITIGNORE } from './core/ignore.ts';
 import { openDb } from './sql/db.ts';
 import { SqlIndex } from './sql/sql-index.ts';
+import { poolName } from './sql/pool-name.ts';
+import { Share, shareName } from './share.ts';
 import type { Note } from './core/types.ts';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -32,13 +34,21 @@ let rules = new VaultIgnore();
 // The index in SQLite, when the page handed over SQLite's compiled wasm: kept in the origin private
 // file system across starts, so it is also the parse cache and the IndexedDB one is not used.
 let store: SqlIndex | null = null;
+let sqliteWasm: WebAssembly.Module | undefined;
+// The vault's database can be held by one indexer. When another Roam window or tab has this vault
+// open, its indexer holds it, and this one asks that one instead of opening the vault (share.ts).
+let share: Share | null = null;
+const follows = () => share?.role === 'follower';
 let live = false;      // is the file watcher running?
 let notLiveWhy = '';
 
 const post = (msg: unknown) => self.postMessage(msg);
+/** To this window's page, and to the windows whose indexers follow this one. `keep`: a window that
+ *  opens the vault later is told it too. */
+const tell = (msg: unknown, keep = false) => { post(msg); share?.tell(msg, keep); };
 let shown = ''; // the state last reported
 // `scanning` is the progress of a scan that runs while the index can already answer.
-const status = (state: string, detail = '', scanning = '') => { shown = state; post({ type: 'status', state, detail, scanning, live, notLiveWhy }); };
+const status = (state: string, detail = '', scanning = '') => { shown = state; tell({ type: 'status', state, detail, scanning, live, notLiveWhy }, true); };
 const noteCount = (n: number) => `${n} ${n === 1 ? 'note' : 'notes'}`;
 
 // ---------- file system over a FileSystemDirectoryHandle ----------
@@ -284,7 +294,7 @@ async function flush() {
   if (!changed || e !== engine) return;
   if (!store) saveCacheSoon(e);
   if (shown === 'ready') status('ready', noteCount(e.idx.noteCount()));
-  post({ type: 'changed', paths: [...paths, ...folders.map((f) => f.path)] });
+  tell({ type: 'changed', paths: [...paths, ...folders.map((f) => f.path)] });
 }
 /** Start the file watcher. Whether it is running goes out with every status message. */
 async function watch() {
@@ -337,7 +347,7 @@ async function build() {
       if (store) store.markScanned(); else saveCacheSoon(scanned);
       engine = scanned;
       status('ready', notes());
-      if (stats.changed || !answers) post({ type: 'changed', paths: [] });
+      if (stats.changed || !answers) tell({ type: 'changed', paths: [] });
       return stats;
     }
     // Without a database: a first scan, or the vault's daily note format changed. A new index,
@@ -349,7 +359,7 @@ async function build() {
     engine = next;
     saveCacheSoon(next);
     status('ready', noteCount(stats.notes));
-    post({ type: 'changed', paths: [] });
+    tell({ type: 'changed', paths: [] });
     return stats;
   } catch (e) {
     // Say so, or the vault would stay "indexing" for good (folder moved, deleted or unmounted).
@@ -371,33 +381,69 @@ function scan(): Scan {
   return queued ??= running.catch(() => {}).then(() => { queued = null; return scan(); });
 }
 
-const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
-  async open({ handle, key, wasm }) {
-    if (key !== vaultKey) { engine = null; unsaved = new Map(); store?.close(); store = null; }
-    if (wasm && !store) {
-      try {
-        const o = await openDb(key, wasm);
-        store = new SqlIndex(o.db);
-        if (!o.persistent) console.warn('[roam-vaults] index kept in memory:', o.why);
-        // The database is the cache now: what the in-memory index kept in IndexedDB goes.
-        else deleteNotes(key).catch(() => { /* the cache is only an optimisation */ });
-      } catch (e) { console.warn('[roam-vaults] SQLite unavailable, using the in-memory index', e); }
-    }
-    root = handle; vaultKey = key; dirs = new Map(); diskNames = new Map(); rules = new VaultIgnore();
-    await watch(); // before the scan, so a file edited while it runs is not missed
-    return scan();
-  },
+/** Open the vault's database and scan the vault: for the indexer that has the vault. */
+async function start(): Scan {
+  if (sqliteWasm && !store) {
+    try {
+      const o = await openDb(vaultKey, sqliteWasm);
+      store = new SqlIndex(o.db);
+      if (!o.persistent) console.warn('[roam-vaults] index kept in memory:', o.why);
+      // The database is the cache now: what the in-memory index kept in IndexedDB goes.
+      else deleteNotes(vaultKey).catch(() => { /* the cache is only an optimisation */ });
+    } catch (e) { console.warn('[roam-vaults] SQLite unavailable, using the in-memory index', e); }
+  }
+  await watch(); // before the scan, so a file edited while it runs is not missed
+  return scan();
+}
+const NO_SCAN: BuildStats = { notes: 0, files: 0, reread: 0, cached: 0, changed: false, errors: [], ms: 0 };
+
+// What a page can ask of the indexer that has its vault: its own, or another window's.
+const answers: Record<string, (a: any) => Promise<unknown> | unknown> = {
   rescan: () => scan(),
   query: ({ title }) => engine ? engine.query(title, LINES_AT_FIRST) : null,
   lines: ({ items }) => engine ? engine.lines(items) : (items as unknown[]).map(() => null),
   read: ({ path }) => engine!.read(path),
   resolve: ({ target, from }) => engine?.resolve(target, from) ?? null,
-  close() { observer?.disconnect(); observer = null; engine = null; root = null; store?.close(); store = null; return true; },
+  same: ({ handle }) => root ? root.isSameEntry(handle) : false,
 };
+const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
+  async open({ handle, key, wasm }) {
+    if (key !== vaultKey) { engine = null; unsaved = new Map(); store?.close(); store = null; share?.close(); share = null; }
+    root = handle; vaultKey = key; sqliteWasm = wasm; dirs = new Map(); diskNames = new Map(); rules = new VaultIgnore();
+    if (wasm) {
+      share ??= new Share(shareName(poolName(key)), {
+        locks: (globalThis as any).navigator?.locks,
+        channel: typeof BroadcastChannel === 'undefined' ? undefined : (name) => new BroadcastChannel(name),
+      }, {
+        serve: (cmd, args) => answers[cmd](args ?? {}),
+        // What the page hears from its own indexer, marked as coming from another window's.
+        told: (msg: any) => post(msg?.type === 'status' ? { ...msg, follower: true } : msg),
+        // The window that had the vault is gone: it is this indexer's now.
+        promoted: () => { start().catch(() => { /* build() has already reported the failure */ }); },
+      });
+      if (!(await share.claim())) {
+        // Another window has the vault: nothing is opened here, and its status comes from there.
+        // Unless its vault is another folder of the same name (this one removed there and that one
+        // added, or the other way round): then this indexer is on its own.
+        if (await share.ask<boolean>('same', { handle }, 0).catch(() => true)) return NO_SCAN;
+        share.close(); share = null;
+      }
+    }
+    return start();
+  },
+  close() { observer?.disconnect(); observer = null; engine = null; root = null; store?.close(); store = null; share?.close(); share = null; return true; },
+};
+// A scan can take minutes: its answer is waited for as long as the vault stays where it is.
+const NO_LIMIT = new Set(['rescan']);
 
 self.onmessage = async ({ data }) => {
   if (data.walk) return runWalker(self, data.walk); // this worker is a walker: it takes over from here
   const { id, cmd, args } = data;
-  try { post({ id, ok: true, result: await commands[cmd](args ?? {}) }); }
+  try {
+    const result = cmd in commands ? commands[cmd](args ?? {})
+      : follows() ? share!.ask(cmd, args ?? {}, NO_LIMIT.has(cmd) ? 0 : undefined)
+      : answers[cmd](args ?? {});
+    post({ id, ok: true, result: await result });
+  }
   catch (e) { post({ id, ok: false, error: `${(e as Error).name}: ${(e as Error).message}` }); }
 };

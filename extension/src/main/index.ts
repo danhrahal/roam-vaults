@@ -9,6 +9,7 @@ import { ATTR, installStyles, renderPanel, drawnRows, notify, removeToast, openV
 import type { PageResult, Backlink } from '../engine.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
 import { SQL_DIR, poolName } from '../sql/pool-name.ts';
+import { shareName } from '../share.ts';
 
 declare const WORKER_SOURCE: string; // injected by build.mjs
 declare const SQLITE_WASM: string;   // SQLite's .wasm, gzipped, base64: injected by build.mjs
@@ -37,6 +38,9 @@ class Vault implements PanelVault {
   private opened = false; // has the worker been given the folder?
   private stopped = false;
   private token: string | null = null; // this vault's scan mark, while set (see scan-mark.ts)
+  /** Another Roam window or tab has this vault open, and this one shows what that one's indexer
+   *  has (see share.ts). The scan mark is that window's to keep. */
+  follows = false;
 
   constructor(id: string, handle: FileSystemDirectoryHandle) {
     this.id = id; this.handle = handle; this.name = handle.name;
@@ -45,7 +49,7 @@ class Vault implements PanelVault {
       if (data.id !== undefined) {
         const w = this.waiting.get(data.id); this.waiting.delete(data.id);
         if (data.ok) w?.res(data.result); else w?.rej(new Error(data.error));
-      } else if (data.type === 'status') this.onStatus(data.state, data.detail, data.live, data.notLiveWhy, data.scanning);
+      } else if (data.type === 'status') { this.follows = !!data.follower; this.onStatus(data.state, data.detail, data.live, data.notLiveWhy, data.scanning); }
       else if (data.type === 'changed') { this.stale(); refreshAll(); }
     };
     this.worker.onerror = (e) => {
@@ -103,6 +107,7 @@ class Vault implements PanelVault {
   }
   /** Set or clear the scan mark (see scan-mark.ts). */
   mark(on: boolean) {
+    if (this.follows) { this.token = null; return; }
     if (on === (this.token !== null)) return;
     this.token = on ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` : null;
     void setScanMark(this.id, this.token);
@@ -118,6 +123,7 @@ class Vault implements PanelVault {
     try { allowed = await ensurePermission(this.handle, ask); }
     catch (e) { console.warn('[roam-vaults] permission check failed for', this.name, e); }
     if (!allowed) { this.set({ kind: 'permission' }); return; }
+    if (!this.opened) this.follows = (await openElsewhere()).has(this.id);
     this.set({ kind: 'indexing', detail: '' });
     this.opened = true;
     try {
@@ -167,6 +173,15 @@ class Vault implements PanelVault {
     a.click();
   }
   stop() { this.mark(false); this.stopped = true; this.worker.terminate(); this.fail(new Error('The vault was removed.')); }
+}
+
+/** The vaults (of those saved here) that an indexer has open now: another window's or tab's, when
+ *  asked before this one's indexers open theirs. */
+async function openElsewhere(ids = vaults.map((v) => v.id)): Promise<Set<string>> {
+  try {
+    const held = new Set(((await (navigator as any).locks.query()).held ?? []).map((l: { name: string }) => l.name));
+    return new Set(ids.filter((id) => held.has(shareName(poolName(id)))));
+  } catch { return new Set(); }
 }
 
 let vaults: Vault[] = [];
@@ -324,6 +339,8 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
   const saved = await loadVaults().catch(() => []);
   if (load !== loads) return; // unloaded while the saved vaults were being read
   const unfinished = await unfinishedScans(saved.map((x) => x.id));
+  // A scan another window is running now has its mark set, and is not one that didn't finish.
+  for (const id of await openElsewhere([...unfinished])) unfinished.delete(id);
   if (load !== loads) return;
   vaults = saved.map((x) => new Vault(x.id, x.handle));
   for (const v of vaults) if (unfinished.has(v.id)) v.set({ kind: 'unfinished' });

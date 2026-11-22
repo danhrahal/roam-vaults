@@ -48,6 +48,11 @@ Roam Depot tab.
   are resolved when a page asks for them, so there is no object per link. The worker keeps a handle for each
   folder, not for each note, because every live file handle also costs memory in Roam's main process. See
   [Memory](#memory).
+- A page's result names the notes that link to it and the lines they do it on. The text of those lines is
+  read from the notes themselves, and that reading is most of what a page costs (about 0.2 ms a note), so
+  the result comes with the text for the 60 notes a page draws first (`LINES_AT_FIRST`). The rest are
+  marked `unread`, and the panel asks for their lines (`lines` in `worker.ts`) just before it draws them
+  as the page is scrolled. At 100,000 notes that took a typical page's lookup from 42 ms to 20 ms.
 - The index is a SQLite database, one per vault, kept in the Roam app's storage on this computer (see
   [SQLite index](#sqlite-index)). It holds each note with its file's size and modification time, so it is
   also the cache: a scan only reads the files that changed. Removing a vault deletes its database.
@@ -96,8 +101,17 @@ backlog); its code is in commit 1b8305b.
   once (`compileSqlite` in `main/index.ts`) and hands the compiled module to each vault's worker in `open`.
   If that fails, the worker uses the in-memory index.
 - Each vault has its own database in the origin private file system, in `.roam-vaults/<poolName(id)>`, through
-  the `opfs-sahpool` VFS (`sql/db.ts`). A pool can be open in one worker at a time: a second Roam window on the
-  same vault gets a database in memory instead. Removing a vault deletes its folder.
+  the `opfs-sahpool` VFS (`sql/db.ts`). Removing a vault deletes its folder.
+- A pool can be open in one worker at a time, so a vault open in several Roam windows or tabs is opened by
+  one indexer, and the others ask that one (`share.ts`). The first to take the vault's Web Lock has it: it
+  opens the database, watches and scans as usual, and sends every status and change over a BroadcastChannel
+  too. The others open nothing and read no files; they pass `query`, `lines`, `read`, `resolve` and `rescan`
+  on and hand the answers to their pages, and their status messages carry `follower`, so their pages leave
+  the scan mark to the window that scans. Each waits in line for the lock: when the window that has the
+  vault closes, the next one opens the database and carries on. A window whose vault of that name is another
+  folder (`same`), or one whose worker can't get the database for another reason, falls back to a database
+  in memory, which costs memory and reads the whole vault. `test/share.test.ts` and the two-window block of
+  `test/browser-smoke.mjs` cover it.
 - The tables are in `sql/schema.ts`: add a step at the end of `MIGRATIONS`. Step 2 adds the similar-name
   tables (`sql/fuzzy.ts`), which `SqlIndex` writes with each batch of notes. `SqlIndex` (`sql/sql-index.ts`)
   overrides the lookups `VaultIndex` makes (`pathsNamed`, `eachLinker`, `aliasPaths`, ...), so link resolution
@@ -133,6 +147,33 @@ screenshot is taken until the graph is open, and Roam's own log and console stay
 To run it by hand: install the Roam `.deb` and Xvfb, start `Xvfb :99`, then
 `DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… node test/real-roam/run.mjs` (`NOTES=2000` for a quicker run).
 A Roam profile that is already signed in skips the sign-in.
+
+## README screenshots (GitHub Actions)
+
+The README's pictures are taken in real Roam by `test/real-roam/screenshots.mjs`: it signs in to the test
+graph, adds two small vaults about a garden (and a generated one to catch a scan part way), and
+photographs the page section, an unfolded note, the note viewer, a note with a similar name, the counts
+under a page title (turning their switch on for the picture and off again), the settings
+tab and a scan's progress bar, at twice the pixel density. `.github/workflows/screenshots.yml` runs it,
+commits the PNGs to `docs/images` on the branch it ran for, and points the README's image links (and those of its built copy in `dist`) at that
+commit, since Roam Depot shows the README and needs links pinned to a commit. Run it from Actions >
+Screenshots > Run workflow on the release branch (it refuses the default branch). Its push gets no checks
+of its own, so run it before the last commit of a release. A feature that changes how something looks
+gets its picture in the script, so the next run retakes it.
+
+## Releasing
+
+Before every release to Roam Depot:
+
+1. Every feature has a section in `README.md` with a picture of it, and the README reads well as the
+   extension's page in Roam Depot.
+2. Run the Screenshots workflow on the release branch, so every picture shows the build being released,
+   and look at each one.
+3. Set the release date in `CHANGELOG.md`; `package.json` has the version.
+4. After the release branch is merged, run Real Roam on `main` (Actions > Real Roam > Run workflow), and
+   check that the commit the README's image links are pinned to is on `main`.
+5. Bump `source_commit` in the Roam Depot metadata to that `main` commit and open the Roam Depot pull
+   request (`docs/DEPOT-SUBMISSION.md`).
 
 ## Profiling (GitHub Actions)
 

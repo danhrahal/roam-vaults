@@ -1,6 +1,6 @@
 // DOM pieces: styles, toasts, the "External Vault References" panel and the read-only note viewer.
 // Plain DOM with Blueprint 3 class names (Roam ships Blueprint), so no bundled UI library.
-import type { PageResult } from '../engine.ts';
+import type { PageResult, Backlink } from '../engine.ts';
 import { renderMarkdown, inline } from './markdown.ts';
 
 export const ATTR = 'data-roam-vaults';
@@ -127,6 +127,8 @@ export interface SectionActions {
   openLabel(): string;
   read(path: string): Promise<string>;
   resolve(target: string, from: string): Promise<string | null>;
+  /** Read the lines of linking notes that came without their text (`unread`), and put it in them. */
+  lines(notes: Backlink[]): Promise<void>;
 }
 export interface PanelVault { id: string; name: string; state: SectionState; act: SectionActions }
 
@@ -182,6 +184,11 @@ const NEAR = '800px'; // how far below the window the end of the list may be bef
 const drawing = new WeakMap<HTMLElement, IntersectionObserver>();
 /** How many notes each panel has drawn, and for which page. */
 const reached = new WeakMap<HTMLElement, { title: string; n: number }>();
+/** How many notes a panel has drawn for the page it is on: drawn again, it draws as many. */
+export function drawnRows(panel: HTMLElement): number {
+  const r = reached.get(panel);
+  return r && r.title === (panel.dataset.title ?? '') ? r.n : 0;
+}
 
 function sectionHead(label: string, open = true, tools: HTMLElement[] = []) {
   const head = h('div', { class: 'rv-sec-head' },
@@ -236,6 +243,8 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
   // The list is worked out whole, as one small function per note, and drawn a part at a time.
   // A note shows once: a tagged note that also links here gets the tag next to its title.
   const rows: (() => HTMLElement)[] = [];
+  /** The linking note a row is, where its lines are still to be read, by row. */
+  const unread = new Map<number, { v: PanelVault; b: Backlink }>();
   const tagsOf = new Map(list.map(({ v, r }) => [v, new Map(r.tagged.map((t) => [t.path, t.tag]))]));
   const tagOnce = (v: PanelVault, path: string) => {
     const tags = tagsOf.get(v)!, t = tags.get(path); tags.delete(path);
@@ -247,8 +256,15 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
   }
   for (const { v, r } of list) for (const b of r.backlinks) {
     const tag = tagOnce(v, b.path);
-    rows.push(() => group(v, 'links', b.path, true, tag,
-      () => h('div', {}, ...b.lines.map((l) => blockEl(l.text, () => v.act.view(b.path, l.line))))));
+    if (b.unread) unread.set(rows.length, { v, b });
+    rows.push(() => group(v, 'links', b.path, true, tag, () => {
+      const box = h('div', {});
+      const draw = () => box.replaceChildren(...b.lines.map((l) => blockEl(l.text, () => v.act.view(b.path, l.line))));
+      draw();
+      // Its lines are read before it is drawn (see `ahead`); if that failed, they are filled in here.
+      if (b.unread) v.act.lines([b]).then(draw, () => {});
+      return box;
+    }));
   }
   for (const { v, r } of list) for (const t of r.tagged) {
     const tag = tagOnce(v, t.path);
@@ -268,14 +284,27 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
     reached.set(panel, { title, n: drawn });
     return part;
   };
+  /** Read the lines of the next `n` notes, a vault at a time, so they are drawn with their text. */
+  const ahead = async (n: number) => {
+    const by = new Map<PanelVault, Backlink[]>();
+    for (let i = drawn; i < drawn + n; i++) {
+      const u = unread.get(i);
+      if (u?.b.unread) by.set(u.v, [...(by.get(u.v) ?? []), u.b]);
+    }
+    await Promise.all([...by].map(([v, notes]) => v.act.lines(notes).catch(() => {})));
+  };
   out.append(...more(Math.max(ROWS_AT_ONCE, before?.title === title ? before.n : 0)));
   if (drawn < rows.length && typeof IntersectionObserver !== 'undefined') {
     const end = h('div', { class: 'rv-more' });
     out.append(end);
+    let reading = false;
     // scrollMargin: Roam's page scrolls inside the window, and rootMargin alone stops at that box
-    const io = new IntersectionObserver((entries) => {
+    const io = new IntersectionObserver(async (entries) => {
       if (!end.isConnected) { io.disconnect(); return; } // the panel was drawn again or removed
-      if (!entries.some((e) => e.isIntersecting)) return;
+      if (reading || !entries.some((e) => e.isIntersecting)) return;
+      reading = true;
+      try { await ahead(ROWS_AT_ONCE); } finally { reading = false; }
+      if (!end.isConnected) { io.disconnect(); return; }
       end.before(...more(ROWS_AT_ONCE));
       io.unobserve(end);
       if (drawn < rows.length) io.observe(end); // looked at afresh: it may still be near the window

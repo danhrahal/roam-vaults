@@ -182,6 +182,26 @@ test('a page many notes link to keeps a bounded amount of note text', async () =
   assert.ok(!kept.has('Huge.md'), 'a very large note is not kept');
 });
 
+test('a page asks for the lines of the notes it draws first, and for the rest when it gets to them', async () => {
+  const files: Record<string, string> = { 'Hub.md': 'hub' };
+  for (let i = 0; i < 150; i++) files[`n/Note ${String(i).padStart(3, '0')}.md`] = `intro\n- [[Hub]] from ${i}\n`;
+  const fs = memFS(files);
+  const e = new VaultEngine(fs);
+  await e.build();
+  const before = fs.reads();
+  const r = await e.query('Hub', 60);
+  assert.equal(r.backlinks.length, 150);
+  assert.equal(fs.reads() - before, 60, 'only the first notes are read');
+  assert.deepEqual(r.backlinks.slice(0, 60).map((b) => [b.unread, b.lines[0].text]), Array.from({ length: 60 }, (_, i) => [undefined, `[[Hub]] from ${i}`]));
+  assert.ok(r.backlinks.slice(60).every((b) => b.unread && b.lines[0].line === 1 && b.lines[0].text === ''));
+  const rest = r.backlinks.slice(60, 100);
+  const texts = await e.lines([...rest.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })), { path: 'gone.md', lines: [0] }]);
+  assert.deepEqual(texts, [...rest.map((_, i) => [`[[Hub]] from ${60 + i}`]), null]);
+  assert.equal(fs.reads() - before, 101, 'the notes asked for, and a try at the one that is gone');
+  const all = await e.query('Hub');
+  assert.ok(all.backlinks.every((b) => !b.unread && b.lines[0].text.startsWith('[[Hub]] from')), 'asked for whole, a page comes whole');
+});
+
 /** What a page shows, in a form two engines can be compared by. */
 async function shows(e: VaultEngine, titles: string[]) {
   const out: Record<string, unknown> = {};

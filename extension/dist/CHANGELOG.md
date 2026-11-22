@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-22)
 
 - Notes with a similar name. When no note is the page, External Vault References also lists notes whose
   name or alias is close to the page title: a typo, two swapped letters, a plural, or the same words in
@@ -20,6 +20,10 @@
 - Scanning a large vault uses much less memory at its peak, on Rescan most of all. The files are walked
   and read in a helper that exists only for the scan, so the file handles a scan makes are given back as
   it goes instead of piling up next to the index.
+- Pages show their vault notes sooner: the lines of linking notes are read for the notes that are drawn,
+  and for the rest as the page is scrolled, instead of for up to 200 notes at once.
+- A vault open in a second Roam window or tab is not read a second time. That window shows what the
+  first one has, follows its changes, and takes the vault over when the first one closes.
 - A first scan is faster: each note is looked up on disk once instead of twice.
 - After Roam starts, pages show their vault notes as soon as the saved index is loaded, instead of after
   every file in the vault has been checked. The check then runs in the background and settings show its

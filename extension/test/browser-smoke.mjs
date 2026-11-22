@@ -228,9 +228,9 @@ await p.evaluate(() => window.__ext.onunload());
 ok('unload removes everything', (await p.locator('[data-roam-vaults]').count()) === 0);
 
 // ---------- failure paths, each in a fresh browser context (so nothing is saved from above) ----------
-async function fresh() {
-  const q = await (await browser.newContext()).newPage();
-  q.on('console', (m) => console.log('[page]', m.text()));
+async function fresh(context) {
+  const q = await (context ?? await browser.newContext()).newPage();
+  q.on('console', (m) => { (q.said ??= []).push(m.text()); console.log('[page]', m.text()); });
   await q.goto(url);
   await q.evaluate(async () => {
     const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault', { create: true });
@@ -494,6 +494,126 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   await q.waitForFunction(() => document.querySelector('.rv-sec-head')?.textContent.includes('402 External'), null, { timeout: 5000 }).catch(() => {});
   ok('a list drawn again after a change keeps its length', (await groups()) >= TAGGED + 1);
   await q.context().close();
+}
+
+{ // the lines of linking notes are read as their notes are drawn, not all with the page
+  const q = await fresh();
+  await q.setViewportSize({ width: 900, height: 700 });
+  const LINKERS = 150;
+  await q.evaluate(async (LINKERS) => {
+    const wrap = document.createElement('div'); wrap.id = 'scroller'; wrap.style.cssText = 'height:100vh;overflow:auto';
+    document.body.prepend(wrap); wrap.append(document.querySelector('.roam-article'));
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    for (let i = 0; i < LINKERS; i++) {
+      const w = await (await vault.getFileHandle(`Linker ${String(i).padStart(3, '0')}.md`, { create: true })).createWritable();
+      await w.write(`intro\n- line of linker ${i} [[Project Alpha]]\n`); await w.close();
+    }
+    await window.__ext.onload({ extensionAPI: window.__api });
+  }, LINKERS);
+  await mountSettings(q);
+  await press(q, 'Add vault folder');
+  await q.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('Linker 000'), null, { timeout: 15000 });
+  const blocks = () => q.evaluate(() => [...document.querySelectorAll('.rv-group')].filter((g) => /^Linker \d+$/.test(g.querySelector('.rv-note').textContent))
+    .map((g) => g.querySelector('.rv-block-text')?.textContent ?? null));
+  const first = await blocks();
+  ok('the first linking notes come with their lines', first.length > 40 && first.length <= 60 && (await q.locator('.rv-group').count()) === 60 && first.every((t, i) => t === `line of linker ${i} [[Project Alpha]]`));
+  let n = await q.locator('.rv-group').count();
+  for (let i = 0; i < 20; i++) {
+    await q.evaluate(() => { const s = document.querySelector('#scroller'); s.scrollTop = s.scrollHeight; });
+    await q.waitForFunction((n) => document.querySelectorAll('.rv-group').length > n, n, { timeout: 3000 }).catch(() => {});
+    const now = await q.locator('.rv-group').count();
+    if (now === n) break;
+    n = now;
+  }
+  const all = await blocks();
+  ok('notes drawn on scrolling are drawn with their lines', all.length === LINKERS && all.every((t, i) => t === `line of linker ${i} [[Project Alpha]]`));
+  // drawn again after a change, the list is as long as before, and every line is there when it is drawn
+  await q.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    const w = await (await vault.getFileHandle('Linker 000.md', { create: true })).createWritable();
+    await w.write('- line of linker 0, edited [[Project Alpha]]\n'); await w.close();
+    window.__empty = 0;
+    new MutationObserver(() => { window.__empty += [...document.querySelectorAll('.rv-group .rv-block-text')].filter((b) => !b.textContent).length; })
+      .observe(document.querySelector('.roam-article'), { childList: true, subtree: true });
+  });
+  await q.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('line of linker 0, edited'), null, { timeout: 5000 }).catch(() => {});
+  const again = await blocks();
+  ok('a list drawn again after a change has every line when it is drawn', again.length === LINKERS && again[0] === 'line of linker 0, edited [[Project Alpha]]'
+    && again.slice(1).every((t, i) => t === `line of linker ${i + 1} [[Project Alpha]]`) && await q.evaluate(() => window.__empty) === 0);
+  await q.context().close();
+}
+
+{ // a second window on a vault shows what the first window's indexer has, and takes the vault over when that window closes
+  const a = await fresh();
+  await a.evaluate(() => window.__ext.onload({ extensionAPI: window.__api }));
+  await mountSettings(a);
+  await press(a, 'Add vault folder');
+  await a.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('see [[Project Alpha]]'), null, { timeout: 10000 });
+  // as while the first window scans: its mark is set
+  await a.evaluate(() => localStorage.setItem('roam-vaults:scanning:My Vault', 'set-by-the-first-window'));
+  const b = await fresh(a.context());
+  // A window opened later finds the vault in the saved list. A handle read back from IndexedDB
+  // crashes headless Chromium, so the list is handed over directly.
+  const saved = (q, folder) => q.evaluate(async (folder) => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle(folder, { create: true });
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (key) { return key === 'vaults' ? { result: [{ id: 'My Vault', handle: vault }] } : get.call(this, key); };
+  }, folder);
+  await saved(b, 'My Vault');
+  await b.evaluate(async () => {
+    // what this window's indexer answers its page, by command
+    window.__answers = {};
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (m, ...rest) {
+      if (m?.cmd) {
+        if (!this.__asked) { this.__asked = new Map(); this.addEventListener('message', ({ data }) => { if (this.__asked.has(data.id)) window.__answers[this.__asked.get(data.id)] = data; }); }
+        this.__asked.set(m.id, m.cmd);
+      }
+      return post.call(this, m, ...rest);
+    };
+    await window.__ext.onload({ extensionAPI: window.__api });
+  });
+  await mountSettings(b);
+  const shown = (q, text, timeout = 5000) => q.waitForFunction((text) => document.querySelector('.rv-panel')?.textContent.includes(text), text, { timeout }).then(() => true, () => false);
+  const locks = (q) => q.evaluate(async () => { const l = await navigator.locks.query(); return [l.held.filter((x) => x.name.startsWith('roam-vaults:')).length, l.pending.filter((x) => x.name.startsWith('roam-vaults:')).length]; });
+  ok('a second window shows the vault\'s notes', await shown(b, 'see [[Project Alpha]]') && await rowHas(b, 'My Vault1 note'));
+  ok('the second window did not read the vault: it waits in line for it', (await b.evaluate(() => window.__answers.open?.result?.files)) === 0 && (await locks(b)).join() === '1,1');
+  // a change in the vault reaches the second window through the first: it has no watcher of its own
+  await a.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    const w = await (await vault.getFileHandle('Second.md', { create: true })).createWritable();
+    await w.write('intro\n- a later line about [[Project Alpha]]\n'); await w.close();
+  });
+  ok('a change in the vault shows in both windows', await shown(a, 'a later line about') && await shown(b, 'a later line about') && await rowHas(b, 'My Vault2 notes'));
+  ok('a scan the other window runs is not taken for one that did not finish, and its mark is left alone', !(await row(b)).includes("didn't finish")
+    && await b.evaluate(() => localStorage.getItem('roam-vaults:scanning:My Vault')) === 'set-by-the-first-window');
+  await b.locator('.rv-block', { hasText: 'a later line about' }).click();
+  ok('a note opens in the second window', await b.waitForSelector('.rv-viewer .rv-hl', { timeout: 5000 }).then(() => true, () => false) && (await b.locator('.rv-viewer .rv-hl').textContent()).includes('a later line about'));
+  await b.keyboard.press('Escape');
+  await press(b, 'Rescan');
+  ok('Rescan in the second window scans in the first', await b.waitForFunction(() => window.__answers.rescan?.result?.files === 2, null, { timeout: 5000 }).then(() => true, () => false));
+  // a window whose vault of that name is another folder does not show the first window's notes
+  const c = await fresh(a.context());
+  await c.evaluate(async () => {
+    const other = await (await navigator.storage.getDirectory()).getDirectoryHandle('Elsewhere', { create: true });
+    const w = await (await other.getFileHandle('Apart.md', { create: true })).createWritable();
+    await w.write('from another folder of the same name, on [[Project Alpha]]\n'); await w.close();
+  });
+  await saved(c, 'Elsewhere');
+  await c.evaluate(() => window.__ext.onload({ extensionAPI: window.__api }));
+  ok('a folder that only shares the vault\'s name is read on its own', await shown(c, 'from another folder of the same name', 10000) && !(await c.locator('.rv-panel').textContent()).includes('a later line about'));
+  await c.close();
+  // the first window closes: the second has the vault now, and its database
+  await a.close();
+  ok('when the first window closes, the second takes the vault over', await b.waitForFunction(async () => { const l = await navigator.locks.query(); return l.held.some((x) => x.name.startsWith('roam-vaults:')) && !l.pending.length; }, null, { timeout: 5000 }).then(() => true, () => false)
+    && await shown(b, 'a later line about') && await rowHas(b, 'My Vault2 notes'));
+  await b.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    const w = await (await vault.getFileHandle('Third.md', { create: true })).createWritable();
+    await w.write('written after the handover, for [[Project Alpha]]\n'); await w.close();
+  });
+  ok('it then watches the vault itself, with the index on disk', await shown(b, 'written after the handover') && !(b.said ?? []).some((t) => t.includes('index kept in memory')));
+  await b.context().close();
 }
 
 for (const [n, pass] of checks) console.log(pass ? 'PASS' : 'FAIL', n);

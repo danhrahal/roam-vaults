@@ -17,7 +17,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { genVault } from './genvault.mjs';
 import {
-  roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, shot, signIn, openGraph,
+  roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, shot, signIn, openGraph, secondRoam, closeSecondRoam,
   dismissDialogs, openPage, openSettings, clickLeaf, loadDevExtension, vaultRows, statusOf, clickButton, addVault,
   clearExtensionState, scanMarked, touchAll, panelText, setSwitch,
 } from './roam.mjs';
@@ -292,6 +292,28 @@ async function main() {
   const recovered = await waitFor('the row Rescan to finish', async () => (await statusOf(BIG)) === `${gen.notes + extra.notes} notes`, 150000).then(() => true, () => false);
   check("The row's Rescan scans the vault and clears the mark", recovered && !(await scanMarked(BIG)), await statusOf(BIG));
   await shot('after-row-rescan');
+
+  // Roam open a second time on the same graph, as in a second tab: it shows the vaults from the
+  // first one's index. Last, so that it adds nothing to the memory measured above.
+  await dismissDialogs();
+  await openPage(TEST_PAGE);
+  await waitFor('External Vault References on the page', async () => (await panelText()).includes('backlink line'), 20000).catch(() => {});
+  const second = await secondRoam();
+  if (!second) log('second Roam: it did not load in a frame, so sharing a vault between two of them was not checked here');
+  else {
+    const text2 = () => second.evaluate(() => document.querySelector('.roam-article .rv-panel')?.innerText ?? '').catch(() => '');
+    const shows = await waitFor('the vault panel in the second Roam', async () => (await text2()).includes('backlink line'), 90000, 500).then(() => true, () => false);
+    check("Roam open a second time on the graph shows the vaults' notes", shows, (await text2()).split('\n')[0]);
+    const locks = await evalIn(async () => {
+      const l = await navigator.locks.query(), ours = (x) => x.name.startsWith('roam-vaults:');
+      return `${l.held.filter(ours).length} vaults open, ${l.pending.filter(ours).length} waited for`;
+    }).catch((e) => e.message);
+    check("…from the first one's index, without opening the vaults again", locks === '2 vaults open, 2 waited for', locks);
+    fs.writeFileSync(path.join(small, 'Two windows note.md'), `Written with Roam open twice, links [[${TEST_PAGE}]].\n`);
+    const both = await waitFor('the new note in both', async () => (await panelText()).includes('Two windows note') && (await text2()).includes('Two windows note'), 20000).then(() => true, () => false);
+    check('A note added on disk shows up in both', both);
+    await closeSecondRoam();
+  }
 }
 
 let stopped = '';

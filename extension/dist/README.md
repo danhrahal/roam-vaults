@@ -4,7 +4,7 @@
 
 See notes from your Obsidian-style vaults in your Roam graph.
 
-![External Vault References on a Roam page, listing notes from two vaults below Linked References](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/one-section.png)
+![External Vault References on a Roam page, listing notes from two vaults below Linked References](https://raw.githubusercontent.com/sweenzor/roam-vaults/425512e095513fab6c68730771bec955afd28479/docs/images/one-section.png)
 
 </div>
 
@@ -54,13 +54,13 @@ kinds of notes, in this order:
   folded, with the letters that differ highlighted. Every word must start with the same letter and keep its
   numbers, so `Q3 Plan` never matches `Q4 Plan`, and titles under five letters don't get them.
 
-![The note that is the page, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/unfolded-note.png)
+![The note that is the page, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/425512e095513fab6c68730771bec955afd28479/docs/images/unfolded-note.png)
 
 Click a note title or line to read the whole note in Roam. Links between notes work inside the viewer.
 If you use Obsidian, click **Open in Obsidian** in the viewer to jump to the note there. To use another
 editor, see [Opening notes in another editor](#opening-notes-in-another-editor).
 
-![The note viewer, opened from a line, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/note-viewer.png)
+![The note viewer, opened from a line, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/425512e095513fab6c68730771bec955afd28479/docs/images/note-viewer.png)
 
 ### Notes with a similar name
 
@@ -68,7 +68,7 @@ When no note is named after the page, the section suggests notes whose name is c
 another spelling doesn't hide a note. Here the page is **Fertiliser schedule** and the note is
 `Soil/Fertilizer schedule`:
 
-![A note with a similar name, faded, with the letter that differs highlighted](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/similar-name.png)
+![A note with a similar name, faded, with the letter that differs highlighted](https://raw.githubusercontent.com/sweenzor/roam-vaults/425512e095513fab6c68730771bec955afd28479/docs/images/similar-name.png)
 
 The section updates by itself. When you edit a note in Obsidian or any other editor, the change shows up in Roam within about a
 second.
@@ -87,7 +87,7 @@ second.
 2. Open **Settings → Roam Depot → Vaults**.
 3. Click **Add vault folder**, choose your vault folder, and allow access when asked.
 
-![The Vaults settings tab, with two vaults and the Open notes with field](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/settings.png)
+![The Vaults settings tab, with two vaults and the Open notes with field](https://raw.githubusercontent.com/sweenzor/roam-vaults/425512e095513fab6c68730771bec955afd28479/docs/images/settings.png)
 
 Matching notes then show up below Linked References, as **"External Vault References"**. The
 section appears only on pages that have matching vault notes. Other pages look exactly as before. The first
@@ -112,7 +112,7 @@ Everything is in **Settings → Roam Depot → Vaults**:
   you click **Rescan** in its row (see [Troubleshooting](#troubleshooting)).
 - **Rescan** reads every vault again, except one whose last scan didn't finish. Only changed files are parsed.
 
-![A vault part way through a scan, with a progress bar in its row](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/scan-progress.png)
+![A vault part way through a scan, with a progress bar in its row](https://raw.githubusercontent.com/sweenzor/roam-vaults/425512e095513fab6c68730771bec955afd28479/docs/images/scan-progress.png)
 
 Vaults adds no commands to the command palette.
 

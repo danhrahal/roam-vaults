@@ -154,7 +154,7 @@ The README's pictures are taken in real Roam by `test/real-roam/screenshots.mjs`
 graph, adds two small vaults about a garden (and a generated one to catch a scan part way), and
 photographs the page section, an unfolded note, the note viewer, a note with a similar name, the settings
 tab and a scan's progress bar, at twice the pixel density. `.github/workflows/screenshots.yml` runs it,
-commits the PNGs to `docs/images` on the branch it ran for, and points the README's image links at that
+commits the PNGs to `docs/images` on the branch it ran for, and points the README's image links (and those of its built copy in `dist`) at that
 commit, since Roam Depot shows the README and needs links pinned to a commit. Run it from Actions >
 Screenshots > Run workflow on the release branch (it refuses the default branch). Its push gets no checks
 of its own, so run it before the last commit of a release. A feature that changes how something looks

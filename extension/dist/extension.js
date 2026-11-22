@@ -554,7 +554,7 @@ ${path}`;
           { class: "rm-ref-page-view-title rv-group-title" },
           h(
             "span",
-            { class: "rv-note", title: `${v.name}/${path}`, onclick: () => v.act.view(path) },
+            { class: "rv-note", onclick: () => v.act.view(path) },
             showVault ? h("span", { class: "rv-vault" }, `${v.name}/`) : null,
             ...marked(path.replace(/\.md$/i, ""), path.lastIndexOf("/") + 1, marks)
           )

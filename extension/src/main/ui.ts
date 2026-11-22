@@ -232,7 +232,7 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
     return h('div', { class: 'rv-group' + cls },
       h('div', { class: 'flex-h-box rv-group-head' }, c,
         h('div', { class: 'rm-ref-page-view-title rv-group-title' },
-          h('span', { class: 'rv-note', title: `${v.name}/${path}`, onclick: () => v.act.view(path) },
+          h('span', { class: 'rv-note', onclick: () => v.act.view(path) },
             showVault ? h('span', { class: 'rv-vault' }, `${v.name}/`) : null, ...marked(path.replace(/\.md$/i, ''), path.lastIndexOf('/') + 1, marks))),
         tag ? h('span', { class: 'rv-tagref' }, `#${tag}`) : null),
       box);

@@ -232,6 +232,7 @@ ok('a note in a folder named like the page is listed by its path, folded', folde
   && (await p.locator('.rv-sec-head strong').textContent()) === '1 External Vault References'
   && await p.locator('.rv-group').first().locator('.rv-content').evaluate((e) => e.hidden));
 ok('nothing new is drawn for the folder itself', await p.evaluate(() => !document.querySelector('.rv-panel .rv-file, .rv-panel .rv-count')));
+ok('no hover tooltips in the section', await p.evaluate(() => !document.querySelector('.rv-panel [title]')));
 await p.locator('.rv-group-caret').first().click();
 ok('its caret shows the note in place', await p.waitForFunction(() => document.querySelector('.rv-group .rv-preview')?.textContent.trim().length > 0, null, { timeout: 3000 }).then(() => true, () => false));
 await p.locator('.rv-note').first().click();

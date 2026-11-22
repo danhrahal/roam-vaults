@@ -13,7 +13,7 @@ import path from 'node:path';
 import { genVault } from './genvault.mjs';
 import {
   roam, log, sleep, evalIn, serve, stopServing, launchRoam, killRoam, waitFor, signIn, openGraph, dismissDialogs,
-  openVaultsTab, loadDevExtension, addVault, statusOf, clickButton, clearExtensionState, touchAll, panelText,
+  openVaultsTab, loadDevExtension, addVault, statusOf, clickButton, clearExtensionState, touchAll, panelText, setSwitch,
 } from './roam.mjs';
 
 const EMAIL = process.env.ROAM_EMAIL, PASSWORD = process.env.ROAM_PASSWORD;
@@ -32,7 +32,7 @@ roam.logDir = WORK; // Roam's own log stays here: it isn't ours to publish
 const PAGE = 'Tomatoes', SIMILAR_PAGE = 'Fertiliser schedule';
 const PAGES = {
   [PAGE]: ['Sow indoors in March, plant out after the last frost', 'This year: San Marzano, Sungold and Black Krim', 'Feed every week once the first truss sets'],
-  'Garden jobs': [`Order canes for the [[${PAGE}]]`, 'Turn the compost'],
+  'Garden jobs': [`Order canes for the [[${PAGE}]]`, 'Turn the compost', 'Net the tomatoes before the blackbirds find them'],
   [SIMILAR_PAGE]: ['Ask at the allotment what they use on the squash'],
 };
 // The vaults: folders of Markdown notes, as Obsidian keeps them.
@@ -54,17 +54,16 @@ const VAULTS = {
 };
 const ARCHIVE = 'Archive', ARCHIVE_NOTES = +(process.env.NOTES || 20000); // a vault large enough to catch part way through a scan
 
-/** Makes the pages that are missing or empty. */
+/** Makes the pages that are missing, and the blocks a page doesn't have yet. */
 const makePages = () => evalIn(async (PAGES) => {
   const api = window.roamAlphaAPI;
   const uidOf = (t) => api.data.q('[:find ?u . :in $ ?t :where [?p :node/title ?t] [?p :block/uid ?u]]', t);
-  // A page can be there already and empty, made by a [[link]] to it from another page.
-  const empty = (uid) => !api.data.q('[:find ?b . :in $ ?u :where [?p :block/uid ?u] [?p :block/children ?b]]', uid);
+  const blocksOf = (uid) => new Set(api.data.q('[:find ?s :in $ ?u :where [?p :block/uid ?u] [?p :block/children ?b] [?b :block/string ?s]]', uid).map((r) => r[0]));
   for (const [title, blocks] of Object.entries(PAGES)) {
     if (!uidOf(title)) await api.data.page.create({ page: { title, uid: api.util.generateUID() } });
     const page = uidOf(title);
-    if (!empty(page)) continue;
-    for (const [order, string] of blocks.entries()) await api.data.block.create({ location: { 'parent-uid': page, order }, block: { string, uid: api.util.generateUID() } });
+    const have = blocksOf(page); // a page can be there already: from an earlier run, or made empty by a [[link]] to it
+    for (const [order, string] of blocks.entries()) if (!have.has(string)) await api.data.block.create({ location: { 'parent-uid': page, order }, block: { string, uid: api.util.generateUID() } });
   }
   await new Promise((r) => setTimeout(r, 500));
 }, PAGES);
@@ -132,6 +131,7 @@ async function main() {
   await start();
   await clearExtensionState();
   await loadDevExtension();
+  await setSwitch('Reference counts', false); // settings sync through the graph: an earlier run may have left it on
   await makePages();
 
   for (const [name, files] of Object.entries(VAULTS)) {
@@ -173,7 +173,21 @@ async function main() {
   await sleep(500);
   await snap('similar-name', await pageBox());
 
-  // 6. A scan part way: a larger vault, every file changed, scanned again.
+  // 6. The counts under the page title, which are off until their switch is turned on. Turned off
+  //    again whatever happens: the setting syncs through the graph, to every run after this one.
+  await setSwitch('Reference counts', true);
+  try {
+    await openPage(PAGE);
+    await waitFor('the three counts under the title', () => evalIn(() => document.querySelectorAll('.roam-article .rm-title-display-container + .rv-counts strong').length === 3), 20000);
+    await sleep(500);
+    const article = await boxOf('.roam-article'), title = await boxOf('.roam-article .rm-title-display'), refs = await boxOf('.roam-article .rm-reference-main');
+    const y = Math.max(0, title.y - 24);
+    await snap('reference-counts', { x: article.x, y, width: article.width, height: refs.y - 16 - y }); // the title, the counts and the page's own blocks
+  } finally {
+    await setSwitch('Reference counts', false);
+  }
+
+  // 7. A scan part way: a larger vault, every file changed, scanned again.
   const big = path.join(WORK, ARCHIVE);
   const gen = genVault(ARCHIVE_NOTES, big);
   await addVault(big);

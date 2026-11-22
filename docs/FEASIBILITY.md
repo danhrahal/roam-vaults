@@ -458,4 +458,5 @@ without running it:
 - Local Network Access: https://developer.chrome.com/blog/local-network-access
 - Persistent file-system permissions: https://developer.chrome.com/blog/persistent-permissions-for-the-file-system-access-api
 
-**Prototype:** [`spike/`](../spike). Its README has run instructions.
+**Prototype:** the throwaway prototype these numbers come from has been removed from the repository. Its
+parser, link resolver and matcher grew into [`extension/src/core/`](../extension/src/core).

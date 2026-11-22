@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-22)
 
 - Notes with a similar name. When no note is the page, External Vault References also lists notes whose
   name or alias is close to the page title: a typo, two swapped letters, a plural, or the same words in

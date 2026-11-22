@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+- External Vault References are drawn like Roam's Linked References. A line that links to the page is a
+  Roam block with the headings and list items it sits under as a path above it; click a part of the path
+  to open it in place, and click a line's caret to show the items nested under it. A note unfolded on the
+  page or opened in the viewer is an outline: headings, nested lists and paragraphs are blocks, and
+  frontmatter properties are attributes.
+- Links, tags, aliases, bold, italics, highlights, strikethrough, to-do boxes and attributes are drawn as
+  Roam draws them, including Roam's own `{{[[TODO]]}}`, `^^highlight^^` and `Name::` from a Markdown export.
+  `[[` `]]` show or hide with your own Roam setting.
+- A link opens its page in Roam, shift-click opens it in the sidebar, and ctrl-shift-click opens its
+  linked references there, as in Roam. A link to a note without a page opens the note.
+- A click on a line's text no longer opens the note: the bullet and the note title do, as a bullet and a
+  page title do in Roam. The section folds from its caret.
+- Note titles show their folders in grey before the note's name.
+
 ## 0.2.0 (2026-11-22)
 
 - Notes with a similar name. When no note is the page, External Vault References also lists notes whose

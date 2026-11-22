@@ -195,6 +195,54 @@ export function kidsAt(text: string, line: number): OutlineBlock[] {
   return b.kids;
 }
 
+/** A whole note as an outline, the way Roam would hold it as a page: each property of its
+ *  frontmatter an attribute block ("name:: value"), each heading a block with what follows it under
+ *  it (a heading block's text keeps its #s), each list item a block nested by its indentation, each
+ *  paragraph, quote, table or block of code a block. */
+export function outlineOf(text: string): OutlineBlock[] {
+  const r = rows(text);
+  const root: OutlineBlock = { text: '', line: -1, kids: [] };
+  const lines = text.split('\n');
+  let i = 0;
+  if (lines[0]?.replace(/\r$/, '') === '---' && r[0]?.kind === 'blank') {
+    let prop: OutlineBlock | null = null;
+    for (i = 1; i < r.length && !/^(---|\.\.\.)\s*$/.test(lines[i]); i++) {
+      const l = lines[i].replace(/\r$/, '');
+      const m = /^([^\s:#-][^:]*?)\s*:(?:\s+(.*))?$/.exec(l);
+      if (m) { prop = { text: `${m[1].replace(/^["']|["']$/g, '')}::${m[2] ? ' ' + m[2] : ''}`, line: i, kids: [] }; root.kids.push(prop); }
+      else if (prop && l.trim()) prop.kids.push({ text: l.trim().replace(/^-\s+/, ''), line: i, kids: [] });
+    }
+    i++;
+  }
+  const heads: { level: number; b: OutlineBlock }[] = [];
+  let items: { indent: number; b: OutlineBlock }[] = [];
+  const under = () => heads[heads.length - 1]?.b ?? root;
+  while (i < r.length) {
+    const row = r[i];
+    if (row.kind === 'blank') { i++; continue; }
+    if (row.kind === 'heading') {
+      while (heads.length && heads[heads.length - 1].level >= row.level) heads.pop();
+      const b: OutlineBlock = { text: clip('#'.repeat(row.level) + ' ' + row.text), line: i, kids: [] };
+      under().kids.push(b); heads.push({ level: row.level, b }); items = [];
+      i++; continue;
+    }
+    if (row.kind === 'item') {
+      while (items.length && items[items.length - 1].indent >= row.indent) items.pop();
+      const b: OutlineBlock = { text: blockText(r, i), line: i, kids: [] };
+      (items[items.length - 1]?.b ?? under()).kids.push(b); items.push({ indent: row.indent, b });
+      i = ownEnd(r, i); continue;
+    }
+    // a paragraph, a quote, a table: the lines up to a blank one. A block of code: up to its end.
+    let end = i + 1;
+    while (end < r.length && r[end].kind === row.kind) end++;
+    const part = r.slice(i, end), base = Math.min(...part.map((p) => p.indent));
+    if (row.indent === 0) items = [];
+    (row.indent > 0 && items.length ? items[items.length - 1].b : under()).kids.push({ text: clip(part.map((p) => ' '.repeat(p.indent - base) + p.text).join('\n')), line: i, kids: [] });
+    i = end;
+  }
+  return root.kids;
+}
+
 /** What a vault gives for one line of a note that it read: the block the line is in. */
 export type LineRead = Pick<LineContext, 'text' | 'line' | 'up' | 'kids' | 'cut'>;
 /** A line of a page result, once read. `at` is the line its block starts on. */

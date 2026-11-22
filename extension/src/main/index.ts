@@ -5,7 +5,7 @@ import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
 import { createSettingsPanel, scanProgress, COUNTS_SETTING, type SettingsVault } from './settings.ts';
-import { ATTR, installStyles, renderPanel, renderCounts, drawnRows, h, type Count, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
+import { ATTR, installStyles, renderPanel, renderCounts, drawnRows, h, type Count, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type Where, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult, Backlink } from '../engine.ts';
 import { followBrackets } from './brackets.ts';
 import { putLine, type LineRead } from '../core/outline.ts';
@@ -64,6 +64,7 @@ class Vault implements PanelVault {
       resolve: (target, from) => this.call<string | null>('resolve', { target, from }).catch(() => null),
       openOutside: (path) => this.openOutside(path),
       openLabel: () => openLabel(openWith()),
+      go: openInRoam,
     };
     this.act = {
       ...viewer,
@@ -71,7 +72,6 @@ class Vault implements PanelVault {
       remove: () => removeVault(this),
       view: (path, line) => openViewer(path, line, viewer),
       lines: (notes) => this.lines(notes),
-      go: openInRoam,
     };
   }
   call<T>(cmd: string, args?: unknown): Promise<T> {
@@ -358,15 +358,16 @@ function syncAllCounts() {
   });
 }
 
-/** Open the page with this title in Roam: in the main window, or in the right sidebar. False when
- *  the graph has no such page (a click must not make one). */
-function openInRoam(title: string, sidebar: boolean): boolean {
+/** Open the page with this title in Roam: in the main window, or in the right sidebar as its
+ *  outline, its linked references or its graph. False when the graph has no such page (a click must
+ *  not make one). */
+function openInRoam(title: string, where: Where): boolean {
   const api = window.roamAlphaAPI;
   let uid: string | undefined;
   try { uid = api.pull('[:block/uid]', [':node/title', title])?.[':block/uid']; } catch { return false; }
   if (!uid) return false;
-  if (sidebar) api.ui.rightSidebar.addWindow({ window: { type: 'outline', 'block-uid': uid } });
-  else api.ui.mainWindow.openPage({ page: { uid } });
+  if (where === 'main') api.ui.mainWindow.openPage({ page: { uid } });
+  else api.ui.rightSidebar.addWindow({ window: { type: where, 'block-uid': uid } });
   return true;
 }
 

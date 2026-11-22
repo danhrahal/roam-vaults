@@ -1,66 +1,48 @@
-// A deliberately small, read-only Markdown renderer for the note viewer. Covers what
-// most vault notes use: frontmatter, headings, lists, quotes, code, emphasis, wikilinks,
-// embeds, Markdown links and tags. Everything else shows as plain text. Builds DOM
-// nodes directly, so note text is never parsed as HTML.
+// Draws the text of a block of a note. Read-only, and deliberately small: it covers what most vault
+// notes use (emphasis, wikilinks, embeds, Markdown links, tags, tasks, quotes, code) and shows
+// everything else as plain text. It builds DOM nodes directly, so note text is never parsed as HTML,
+// and nothing in a note is run or fetched (no queries, embeds, iframes or images), which Roam's own
+// renderer would do with text it is given.
 //
 // Inline text is drawn with the elements and class names Roam itself draws a block's text with
 // (measured in Roam's Linked References, 2026-11-22), so it looks the same and a theme that
 // restyles Roam restyles it too. Both Obsidian's and Roam's spelling of each thing is read, since
 // a vault can be an export of a Roam graph: [[Page|alias]] and [alias]([[Page]]), *i* and __i__,
 // ==h== and ^^h^^, "- [ ] " and {{[[TODO]]}}, #a/b and #[[a b]], Name:: attributes.
-import { splitFrontmatter } from '../core/frontmatter.ts';
 
-export function renderMarkdown(text: string, highlightLine?: number): DocumentFragment {
-  const frag = document.createDocumentFragment();
-  const fm = splitFrontmatter(text);
-  const lines = text.split(/\r?\n/); // notes saved on Windows end lines with \r\n
-  let i = 0;
-  if (fm.raw !== null) {
-    const end = fm.bodyStartLine;
-    const props = document.createElement('div');
-    props.className = 'rv-props';
-    props.textContent = lines.slice(1, end - 1).join('\n');
-    props.style.whiteSpace = 'pre-wrap';
-    if (highlightLine !== undefined && highlightLine < end) props.classList.add('rv-hl');
-    frag.append(props);
-    i = end;
+/** Draw a block's text into `parent`. Most blocks are a line of inline text; a block can also hold
+ *  fenced code, be a quote (each line "> "), or be a heading ("## text"). Returns the heading's level,
+ *  0 for a block that is none. */
+export function blockBody(parent: HTMLElement, text: string): number {
+  const heading = /^(#{1,6})[ \t]+/.exec(text);
+  if (heading) { inline(parent, text.slice(heading[0].length)); return heading[1].length; }
+  if (/^>[ \t]?/.test(text) && text.split('\n').every((l) => l.startsWith('>'))) {
+    const q = el('blockquote', 'rm-bq');
+    const lines = text.split('\n').map((l) => l.replace(/^>[ \t]?/, ''));
+    // an Obsidian callout: "> [!note] Title" names its kind and title on the first line
+    lines[0] = lines[0].replace(/^\[!(\w+)\][+-]?[ \t]*/, (_, kind) => (lines[0].replace(/^\[!\w+\][+-]?[ \t]*/, '') ? '' : kind[0].toUpperCase() + kind.slice(1)));
+    inline(q, lines.join('\n'));
+    parent.append(q);
+    return 0;
   }
-  for (; i < lines.length; i++) {
-    const line = lines[i];
-    const fence = /^\s*(```|~~~)/.exec(line);
-    if (fence) {
-      const start = i;
-      const code: string[] = [];
-      for (i++; i < lines.length && !lines[i].trimStart().startsWith(fence[1]); i++) code.push(lines[i]);
-      const pre = document.createElement('pre');
-      pre.textContent = code.join('\n');
-      if (highlightLine !== undefined && highlightLine >= start && highlightLine <= i) pre.classList.add('rv-hl');
-      frag.append(pre);
-      continue;
-    }
-    let el: HTMLElement;
-    let m: RegExpExecArray | null;
-    if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
-      el = document.createElement(`h${Math.min(m[1].length + 1, 6)}`);
-      inline(el, m[2]);
-    } else if ((m = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[( |x|X)\]\s+)?(.*)$/.exec(line))) {
-      el = document.createElement('div');
-      el.className = 'rv-li';
-      el.style.setProperty('--d', String(Math.floor(m[1].replace(/\t/g, '    ').length / 2)));
-      inline(el, (m[2] ? `[${m[2]}] ` : '') + m[3]);
-    } else if ((m = /^>\s?(.*)$/.exec(line))) {
-      el = document.createElement('blockquote');
-      inline(el, m[1].replace(/^\[!(\w+)\][+-]?\s*/, (_, k) => `${k}: `));
-    } else if (!line.trim()) {
-      continue;
-    } else {
-      el = document.createElement('p');
-      inline(el, line);
-    }
-    if (i === highlightLine) el.classList.add('rv-hl');
-    frag.append(el);
+  if (/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(text)) { parent.append(el('hr', 'rm-hr')); return 0; }
+  if (!/(^|\n)[ \t]*(```|~~~)/.test(text)) { inline(parent, text); return 0; }
+  // text with fenced code in it: the text as text, the code as code
+  const lines = text.split('\n');
+  let plain: string[] = [];
+  const flush = () => { if (plain.length) { const sp = el('span'); inline(sp, plain.join('\n')); parent.append(sp); plain = []; } };
+  for (let i = 0; i < lines.length; i++) {
+    const fence = /^([ \t]*)(```|~~~)/.exec(lines[i]);
+    if (!fence) { plain.push(lines[i]); continue; }
+    flush();
+    const code: string[] = [];
+    for (i++; i < lines.length && !lines[i].trimStart().startsWith(fence[2]); i++) code.push(lines[i]);
+    const pre = el('pre', 'rv-code');
+    pre.append(el('code', '', code.join('\n')));
+    parent.append(pre);
   }
-  return frag;
+  flush();
+  return 0;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: string) => {
@@ -73,7 +55,7 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: stri
 /** Where an inline thing can start. What starts there is tried in order; what fits nothing is text. */
 const START = /!?\[|`|\*\*|__|\^\^|==|~~|\*|#|\{\{|https?:\/\//g;
 const RE_TAG = /^#([\p{L}\p{N}_/-]*[\p{L}_/-][\p{L}\p{N}_/-]*)/u;
-const RE_URL = /^https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"]/;
+const RE_URL = /^https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]}'"]/;
 const RE_TODO = /^\{\{(?:\[\[)?(TODO|DONE)(?:\]\])?\}\}/;
 const RE_ATTR = /^([^:`[\]{}()#\n][^:`{}\n]{0,80}?)::(?=\s|$)/;
 const RE_TASK = /^\[( |x|X)\]\s+/;

@@ -83,3 +83,26 @@ test('odd input: an empty note, a line past the end, Windows line ends, rules', 
   assert.equal(contextOf('- a\r\n    - b [[X]]\r\n', [1])[0].up[0].text, 'a');
   assert.deepEqual(contextOf('- a\n---\n* * *\n    - b\n', [3])[0].up, []);
 });
+
+import { outlineOf } from '../src/core/outline.ts';
+
+test('a whole note becomes an outline: properties, headings with what follows them, lists, paragraphs, code', () => {
+  const note = [
+    '---', 'aliases: [Levain]', 'tags:', '  - bread', '  - starter', '---',
+    '# Sourdough', 'A wild yeast bread.', 'Second line of the paragraph.', '',
+    '## Method', '- Mix', '\t- flour and [[Water]]', '\t\t- 75% hydration', '- Fold', '',
+    '```', '- not a block', '```', '', '> a quote', '> of two lines', '',
+    '## Notes', 'last words',
+  ].join('\n');
+  assert.deepEqual(outlineOf(note).map(tree), [
+    'aliases:: [Levain]',
+    ['tags::', ['bread', 'starter']],
+    ['# Sourdough', [
+      'A wild yeast bread.\nSecond line of the paragraph.',
+      ['## Method', [['Mix', [['flour and [[Water]]', ['75% hydration']]]], 'Fold', '```\n- not a block\n```', '> a quote\n> of two lines']],
+      ['## Notes', ['last words']],
+    ]],
+  ]);
+  assert.deepEqual(outlineOf(day).map(tree)[0], contextOf(day, [0]).map(tree)[0]);
+  assert.deepEqual(outlineOf(''), []);
+});

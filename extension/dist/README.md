@@ -45,7 +45,8 @@ kinds of notes, in this order:
   is the daily note for the same date. If several notes match, they're all shown. Click the caret to unfold
   the note and read it in place.
 - **Notes that link here.** These are notes that link to the matching note, or contain `[[This Page]]` even
-  when no such note exists. Links in frontmatter count too. Each linking line is shown like a Roam block.
+  when no such note exists. Links in frontmatter count too. Each linking line is shown as Roam shows a
+  reference: the block, with the headings and list items it sits under as a path above it.
 - **Notes tagged here.** These are notes tagged `#this-page`, shown with the tag. A Roam namespace `a/b`
   matches the nested tag `#a/b`.
 - **Notes with a similar name**, only when no note is this page. These are notes whose name or alias is
@@ -56,7 +57,25 @@ kinds of notes, in this order:
 
 ![The note that is the page, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/unfolded-note.png)
 
-Click a note title or line to read the whole note in Roam. Links between notes work inside the viewer.
+### Notes look like Roam blocks
+
+A note is drawn as the outline Roam would make of it. Headings, list items and paragraphs are blocks, a
+nested list is nested blocks, and frontmatter properties are attributes. A line that links to the page
+is drawn as in Linked References, and works the same way:
+
+- The path above a line names the headings and list items it sits under. Click a part of the path to open it
+  in place.
+- A line with items nested under it has a caret. Click it to show them.
+- Links, tags, bold, highlights and to-do boxes are drawn as Roam draws them. Whether `[[` `]]` show follows
+  your own Roam setting.
+- Click a link to open that page in Roam, or shift-click to open it in the sidebar. A link to a note that
+  has no page opens the note.
+
+![A line from a nested list, with its path above it and the items under it opened](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/nested-line.png)
+
+Notes exported from Roam as Markdown come out with the same blocks, paths and links they had in Roam.
+
+Click a note title or a line's bullet to read the whole note in Roam. Links between notes work inside the viewer.
 If you use Obsidian, click **Open in Obsidian** in the viewer to jump to the note there. To use another
 editor, see [Opening notes in another editor](#opening-notes-in-another-editor).
 

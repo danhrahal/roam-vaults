@@ -131,7 +131,7 @@ const measure = () => page.evaluate(() => {
     const title = g.querySelector('.rm-page__title').textContent;
     const p = parts(g, GROUP);
     for (const t of p.title) delete t.w; // a vault title has the note's folders before its name
-    for (const i of p.item) delete i.y; // Roam's order inside a page is its own
+    for (const i of p.item) { delete i.y; delete i.h; } // Roam's order inside a page is its own; each box is measured below
     const items = Object.fromEntries([...g.querySelectorAll('.rm-reference-item')].map((it) => [it.querySelector('.rm-block-text').innerText, { parts: parts(it, ITEM), text: [...it.querySelectorAll('.rm-zoom-item-content, .rm-block-text')].map((e) => e.innerText) }]));
     return [title.slice(title.lastIndexOf('/') + 1), { parts: p, items, height: r1(g.getBoundingClientRect().height) }];
   }));
@@ -171,6 +171,17 @@ const compare = (m, what) => {
 };
 compare(await measure(), 'brackets shown');
 
+// children: folded at first in both, shown by the caret in both
+const carets = (root) => page.locator(`${root} .rm-reference-item > div > .roam-block-container > .rm-block-main .block-expand .rm-caret`);
+for (const root of ['.roam-article .rm-reference-container', '.roam-article .rv-panel']) {
+  for (const c of await carets(root).all()) { await c.locator('xpath=ancestor::div[contains(@class,"rm-block-main")]').hover(); await page.waitForTimeout(300); if ((await c.evaluate((e) => getComputedStyle(e).opacity)) !== '0') await c.click(); }
+}
+await page.mouse.move(5, 5);
+await page.waitForTimeout(500);
+check('the caret shows a reference\'s children, in the vault as in Roam', await page.evaluate(() => document.querySelectorAll('.rv-panel .rm-block-children .roam-block-container').length === 2 && document.querySelectorAll('.rm-reference-container .rm-block-children .roam-block-container').length === 2));
+compare(await measure(), 'children shown');
+await shot('3-children-shown.png');
+
 // Roam's bracket setting (Ctrl-C Ctrl-B): vault lines follow it
 const brackets = () => page.evaluate(() => [document.querySelectorAll('.rm-reference-container .rm-page-ref__brackets').length, [...document.querySelectorAll('.rv-panel .rm-page-ref__brackets')].filter((b) => b.getClientRects().length).length]);
 const b0 = await brackets();
@@ -183,6 +194,57 @@ check('brackets show in vault lines while Roam shows its own', b0[0] > 0 && b0[1
 check('hiding brackets in Roam hides them in vault lines', b1[0] === 0 && b1[1] === 0, JSON.stringify(b1));
 compare(await measure(), 'brackets hidden');
 await shot('2-brackets-hidden.png');
+
+// the path above a reference: a click on a part shows that parent in place, the reference marked
+const crumb = (root, n) => page.locator(`${root} .rm-reference-item`, { hasText: 'standing orders' }).locator('.rm-zoom-item').nth(n);
+for (const root of ['.roam-article .rm-reference-container', '.roam-article .rv-panel']) await crumb(root, 2).click();
+await page.mouse.move(5, 5);
+await page.waitForTimeout(600);
+const opened = () => page.evaluate(() => ['.rm-reference-container', '.rv-panel'].map((root) => {
+  const item = [...document.querySelectorAll(`.roam-article ${root} .rm-reference-item`)].find((i) => i.textContent.includes('standing orders'));
+  return { crumbs: item.querySelectorAll('.rm-zoom-item').length, blocks: [...item.querySelectorAll('.rm-block-text')].map((b) => b.innerText), marked: [...item.querySelectorAll('.block-highlight-yellow')].map((b) => b.querySelector('.rm-block-text').innerText) };
+}));
+let o = await opened();
+check('a click on the last part of a path shows that parent as a block, the reference marked under it, as in Roam', o[1].crumbs === 2 && JSON.stringify(o[0]) === JSON.stringify(o[1]) && o[1].marked.length === 1, JSON.stringify(o));
+compare(await measure(), 'a parent shown in place');
+await shot('4-parent-shown-in-place.png');
+for (const root of ['.roam-article .rm-reference-container', '.roam-article .rv-panel']) await crumb(root, 0).click();
+await page.mouse.move(5, 5);
+await page.waitForTimeout(600);
+o = await opened();
+check('a click on the first part shows the whole path as nested blocks', o[1].crumbs === 0 && JSON.stringify(o[0]) === JSON.stringify(o[1]), JSON.stringify(o));
+compare(await measure(), 'the whole path shown in place');
+
+// links in a vault line open Roam's pages, as Roam's own links do
+const link = () => page.locator('.rv-panel .rm-block-text .rm-page-ref--link', { hasText: 'Tomás Lindqvist' });
+await link().click({ modifiers: ['Shift'] });
+await page.waitForTimeout(600);
+const side = await page.evaluate(() => window.roamAlphaAPI.ui.rightSidebar.getWindows().map((w) => [w.type, window.roamAlphaAPI.pull('[:node/title]', [':block/uid', w['page-uid'] ?? w['block-uid']])?.[':node/title']]));
+check('shift-click on a link opens its page in the right sidebar', JSON.stringify(side) === JSON.stringify([['outline', 'Tomás Lindqvist']]), JSON.stringify(side));
+await link().click({ modifiers: ['Control', 'Shift'] });
+await page.waitForTimeout(600);
+check('ctrl-shift-click opens the page\'s linked references there', await page.evaluate(() => window.roamAlphaAPI.ui.rightSidebar.getWindows().some((w) => w.type === 'mentions')));
+await shot('5-link-opened-in-sidebar.png', '.roam-body-main, .roam-app');
+await page.evaluate(async () => { for (const w of window.roamAlphaAPI.ui.rightSidebar.getWindows()) await window.roamAlphaAPI.ui.rightSidebar.removeWindow({ window: { type: w.type, 'block-uid': w['page-uid'] ?? w['block-uid'] ?? w['mentions-uid'] } }); await window.roamAlphaAPI.ui.rightSidebar.close(); });
+await link().click();
+await page.waitForFunction(() => document.querySelector('.roam-article .rm-title-display')?.textContent === 'Tomás Lindqvist', null, { timeout: 5000 }).catch(() => {});
+check('a click on a link opens its page in Roam', (await page.locator('.roam-article .rm-title-display').first().textContent()) === 'Tomás Lindqvist');
+await page.waitForSelector('.rv-panel .rm-reference-item');
+check('and that page lists the vault\'s line about it', (await page.locator('.rv-panel').textContent()).includes('trial bake'));
+
+// a whole note, unfolded under its title: an outline of blocks
+await open(PAGE);
+await page.waitForSelector('.rv-panel .rm-reference-item');
+await page.locator('.rv-panel .rv-group-caret').first().click();
+await page.waitForSelector('.rv-panel .rv-preview .roam-block-container');
+check('the note that is the page unfolds into its blocks', JSON.stringify(await page.locator('.rv-panel .rv-preview .rm-block-text').allInnerTexts()) === JSON.stringify(PAGES[PAGE].map((b) => b[0])));
+await shot('6-note-unfolded.png');
+// the bullet opens the note at that block
+await page.locator('.rv-panel .rm-reference-item', { hasText: 'trial bake' }).locator('.rm-bullet').first().click();
+await page.waitForSelector('.rv-viewer .roam-block-container');
+check('a click on a bullet opens the note with that block marked', (await page.locator('.rv-viewer .block-highlight-yellow .rm-block-text').innerText()).includes('trial bake'));
+await page.screenshot({ path: path.join(OUT, '7-note-opened.png') });
+await page.keyboard.press('Escape');
 fs.writeFileSync(path.join(OUT, 'measured.json'), JSON.stringify(await measure(), null, 1));
 
 check('no errors in the page', !errors.length, errors.join(' | ').slice(0, 500));

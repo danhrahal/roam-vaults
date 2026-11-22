@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (unreleased)
 
+- Notes with a similar name. When no note is the page, External Vault References also lists notes whose
+  name or alias is close to the page title: a typo, two swapped letters, a plural, or the same words in
+  another order. They come last, faded, with the letters that differ highlighted in Roam's highlight
+  colour. Every word must start with the same letter and keep its numbers, and titles under five letters
+  get none, so `Q3 Plan` never matches `Q4 Plan` and `Might` never matches `Eight`.
+- The vault index is kept in a database on disk (SQLite, in the Roam app's storage on this computer)
+  instead of in memory, so a large vault takes much less memory while Roam is open. A first scan takes
+  longer. The index is built again by the first scan after this update. Removing a vault deletes its
+  database.
 - **Reference counts**, a new switch in Settings → Roam Depot → Vaults, off until you turn it on. It adds
   a line under the page title that shows how many Linked, Unlinked and External Vault References the page
   has, in that order, so you can see what's further down without scrolling. Click a count to jump to that
@@ -17,6 +26,9 @@
   progress.
 - Rescan, and the check at start, change the index in place instead of building a second one beside it,
   so pages keep their vault notes while it runs and it needs less memory.
+- While a vault is scanned, its row in settings shows a progress bar above the status. A vault that was
+  scanned before fills the bar by the notes counted. A first scan has no total to count towards, so its bar
+  is striped until the scan is done.
 
 ## 0.1.1 (2026-11-17)
 

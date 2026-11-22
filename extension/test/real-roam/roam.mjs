@@ -313,6 +313,8 @@ export async function clearExtensionState() {
   await evalIn(async () => {
     for (const k of Object.keys(localStorage)) if (k.startsWith('roam-vaults')) localStorage.removeItem(k);
     for (const db of ['roam-vaults', 'roam-vaults-cache', 'roam-vaults-marks']) await new Promise((r) => { const q = indexedDB.deleteDatabase(db); q.onsuccess = q.onerror = q.onblocked = r; });
+    // the vaults' SQLite databases, if a run that stopped part way left any
+    await navigator.storage.getDirectory().then((d) => d.removeEntry('.roam-vaults', { recursive: true })).catch(() => {});
   });
 }
 /** Is the vault's scan mark set? It's in localStorage, or (since the crash-mark fix) in IndexedDB. */

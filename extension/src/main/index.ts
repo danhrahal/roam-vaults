@@ -4,12 +4,22 @@ import { loadVaults, saveVaults } from './store.ts';
 import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
-import { createSettingsPanel, COUNTS_SETTING, type SettingsVault } from './settings.ts';
+import { createSettingsPanel, scanProgress, COUNTS_SETTING, type SettingsVault } from './settings.ts';
 import { ATTR, installStyles, renderPanel, renderCounts, h, type Count, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult } from '../engine.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
+import { SQL_DIR, poolName } from '../sql/pool-name.ts';
 
 declare const WORKER_SOURCE: string; // injected by build.mjs
+declare const SQLITE_WASM: string;   // SQLite's .wasm, gzipped, base64: injected by build.mjs
+
+/** SQLite's wasm, compiled once and handed to every vault's worker. Null if it can't be. */
+let sqliteWasm: Promise<WebAssembly.Module | null> | null = null;
+const compileSqlite = () => sqliteWasm ??= (async () => {
+  const gz = Uint8Array.from(atob(SQLITE_WASM), (c) => c.charCodeAt(0));
+  const bytes = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  return WebAssembly.compile(bytes);
+})().catch((e) => { console.warn('[roam-vaults] SQLite not loaded', e); return null; });
 declare global { interface Window { roamAlphaAPI: any } }
 
 // ---------- one connected vault: its own indexer worker ----------
@@ -110,7 +120,7 @@ class Vault implements PanelVault {
     this.set({ kind: 'indexing', detail: '' });
     this.opened = true;
     try {
-      const stats: any = await this.call('open', { handle: this.handle, key: this.id });
+      const stats: any = await this.call('open', { handle: this.handle, key: this.id, wasm: await compileSqlite() });
       if (stats.errors?.length) console.warn('[roam-vaults] unreadable files in', this.name, stats.errors);
     } catch (e) {
       this.set({ kind: 'error', detail: (e as Error).message });
@@ -159,7 +169,8 @@ function settingsVault(v: Vault): SettingsVault {
     : s.kind === 'error' ? `Couldn't read: ${s.detail}`
     : v.scanning ? `Indexing ${v.scanning}` // its files are being checked, and pages show what it has
     : `${v.notes || 'Ready'}${s.live ? '' : ' · not live'}`;
-  return { id: v.id, name: v.name, status, needsPermission: s.kind === 'permission', unfinished: s.kind === 'unfinished', reconnect: () => v.connect(true), remove: () => removeVault(v) };
+  const progress = s.kind === 'indexing' ? scanProgress(s.detail) : s.kind === 'ready' && v.scanning ? scanProgress(v.scanning) : undefined;
+  return { id: v.id, name: v.name, status, progress, needsPermission: s.kind === 'permission', unfinished: s.kind === 'unfinished', reconnect: () => v.connect(true), remove: () => removeVault(v) };
 }
 const save = () => { changed(); return saveVaults(vaults.map((v) => ({ id: v.id, handle: v.handle }))).catch((e) => console.warn('[roam-vaults]', e)); };
 
@@ -176,7 +187,23 @@ async function addVault() {
   await save();
   await v.connect(false);
 }
-const dropCache = (v: Vault) => deleteNotes(v.id).catch((e) => console.warn('[roam-vaults] cache not cleared', e));
+const dropCache = (v: Vault) => Promise.all([
+  deleteNotes(v.id).catch((e) => console.warn('[roam-vaults] cache not cleared', e)),
+  dropDatabase(v.id),
+]);
+/** Delete a vault's SQLite database. Its worker, just ended, can hold the files a moment longer. */
+async function dropDatabase(id: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(SQL_DIR);
+      return await dir.removeEntry(poolName(id), { recursive: true });
+    } catch (e) {
+      if ((e as Error)?.name === 'NotFoundError') return;
+      if (attempt === 5) return console.warn('[roam-vaults] index not cleared', e);
+      await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+    }
+  }
+}
 async function removeVault(v: Vault) {
   v.stop(); // terminates the worker first, so no pending cache save can recreate the entry
   await dropCache(v);
@@ -339,6 +366,9 @@ async function onload({ extensionAPI }: { extensionAPI: any }) {
   settingsAPI = extensionAPI?.settings;
   try { showCounts = settingsAPI?.get?.(COUNTS_SETTING) === true; } catch { showCounts = false; }
   workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
+  // Ask the browser not to clear the vault databases under storage pressure. If it does anyway, a
+  // database comes back empty and the next scan reads the vault again.
+  navigator.storage?.persist?.().catch(() => {});
 
   // No command palette entries (so no hotkeys either): vaults are managed in the settings panel.
   createSettingsPanel(extensionAPI, {
@@ -384,4 +414,10 @@ function onunload() {
   document.querySelectorAll(`[${ATTR}]`).forEach((n) => n.remove());
 }
 
-export default { onload, onunload };
+/** What each vault knows about a page title, straight from its worker. No UI: exported from the
+ *  extension module for timing (test/memory-bench.mjs). */
+async function query(title: string) {
+  return Promise.all(vaults.map((v) => v.call<PageResult | null>('query', { title }).catch(() => null)));
+}
+
+export default { onload, onunload, query };

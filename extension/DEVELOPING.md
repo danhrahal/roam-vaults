@@ -48,14 +48,17 @@ Roam Depot tab.
   are resolved when a page asks for them, so there is no object per link. The worker keeps a handle for each
   folder, not for each note, because every live file handle also costs memory in Roam's main process. See
   [Memory](#memory).
-- Parsed notes are cached in IndexedDB, one record per note, checked against the file's size and modification
-  time, so later starts only re-read changed files and an edit writes one record. Removing a vault deletes
-  its cache.
-- At a later start the index is built from the cache alone and pages are answered from it straight away.
-  The vault's files are then checked in the background (`check()` in `engine.ts`): the index stays in use
-  and only what differs on disk is changed in it. Rescan does the same. Settings show the scan's progress
-  meanwhile, and the scan mark (see `scan-mark.ts`) is set as for any scan. Only a first scan, or a change
-  of the vault's daily note format, builds a whole index in one go.
+- The index is a SQLite database, one per vault, kept in the Roam app's storage on this computer (see
+  [SQLite index](#sqlite-index)). It holds each note with its file's size and modification time, so it is
+  also the cache: a scan only reads the files that changed. Removing a vault deletes its database.
+- At a later start pages are answered from the database straight away. The vault's files are then checked
+  in the background (`check()` in `engine.ts`): the index stays in use and only what differs on disk is
+  changed in it. Rescan does the same, and so does a first scan, into an empty database that answers once
+  the scan is done. Settings show the scan's progress meanwhile, and the scan mark (see `scan-mark.ts`) is
+  set as for any scan.
+- Where SQLite can't be loaded, the index is the same one in JavaScript maps (`core/vault-index.ts`), with
+  the parsed notes cached in IndexedDB, one record per note. There a first scan, or a change of the vault's
+  daily note format, builds a whole index in one go.
 - Folder handles are kept in this device's IndexedDB, never in Roam settings, which sync through the graph.
 - `FileSystemObserver` watches the folder, so edits made in Obsidian or any editor show up within a second.
   A file event re-checks that file. A folder that appears, goes away or moves is walked on its own
@@ -63,6 +66,15 @@ Roam Depot tab.
   their own; a moved folder's notes keep their parse under the new path. Only an `errored` record, or an
   `unknown` one without a path (events lost somewhere in the vault), walks the whole vault again.
 - Daily notes use the format in `.obsidian/daily-notes.json`, falling back to `YYYY-MM-DD`.
+- Similar names: a page that no note is lists notes whose name or alias is close to its title. The scoring,
+  its guards (every word must start with the same letter, keep its numbers, and so on) and the highlighted
+  letters (`diffMarks`) are in `src/core/fuzzy.ts`. The lookup runs on the vault's SQLite database
+  (`src/sql/fuzzy.ts`, see below): each name and alias is a row cut into trigrams by triggers, and a title's
+  rarer trigrams pull the 50 closest keys for `fuzzy.ts` to judge (2 to 5 ms a page at 20,000 notes, 5 MB of
+  database). When SQLite can't load, `src/core/fuzzy-index.ts` does the same in memory, with notes in buckets
+  by the first letters of their words. To measure quality, latency and size of both:
+  `npm pack wordlist-english && tar xzf wordlist-english-*.tgz` once, then
+  `WORDS=path/to/package node --expose-gc test/fuzzy-bench.mjs [notes]`.
 - The scan skips dot-folders, paths matched by the vault's `.gitignore` files (git's rules, through the
   `ignore` package, nearest file decides) and Obsidian's Excluded files (`userIgnoreFilters` in
   `.obsidian/app.json`: a plain entry is a path prefix, `/.../` a regular expression tested against file
@@ -72,6 +84,36 @@ Roam Depot tab.
   `onunload` can remove all of them.
 
 The design and measurements are in [docs/FEASIBILITY.md](../docs/FEASIBILITY.md).
+
+## SQLite index
+
+The worker keeps the index in SQLite instead of JavaScript maps: the notes of a large vault then take up
+disk, not memory. Full-text search over the notes was prototyped on top of it and taken out again (on the
+backlog); its code is in commit 1b8305b.
+
+- SQLite is the official WebAssembly build, `@sqlite.org/sqlite-wasm` (pinned). `build.mjs` gzips its `.wasm`
+  and inlines it in `extension.js` as base64 (Roam Depot allows no code from the network). The page compiles it
+  once (`compileSqlite` in `main/index.ts`) and hands the compiled module to each vault's worker in `open`.
+  If that fails, the worker uses the in-memory index.
+- Each vault has its own database in the origin private file system, in `.roam-vaults/<poolName(id)>`, through
+  the `opfs-sahpool` VFS (`sql/db.ts`). A pool can be open in one worker at a time: a second Roam window on the
+  same vault gets a database in memory instead. Removing a vault deletes its folder.
+- The tables are in `sql/schema.ts`: add a step at the end of `MIGRATIONS`. Step 2 adds the similar-name
+  tables (`sql/fuzzy.ts`), which `SqlIndex` writes with each batch of notes. `SqlIndex` (`sql/sql-index.ts`)
+  overrides the lookups `VaultIndex` makes (`pathsNamed`, `eachLinker`, `aliasPaths`, ...), so link resolution
+  and its tie-break rules are the same code. `test/sql.test.ts` checks both indexes answer every query the same.
+- Every scan is `VaultEngine.check()` on the database: it asks once for every file's size and time
+  (`stamps()`), and writes the notes it read a batch at a time (`upsertNotes`), since a statement costs far
+  more than a row. Writes go into a transaction that is committed every 20,000 rows and by `flush()`. A scan
+  that stops part way leaves the notes it wrote, so the next one carries on from there; the database answers
+  pages at a start only once a scan has finished into it (`scanned`).
+- A scan into an empty database (a first scan) runs without the three indexes only lookups need and with a
+  larger page cache, and makes the indexes at the end (`SqlIndex.bulk`): at 100,000 notes that took a first
+  scan from 37 s to 24 s in the memory benchmark, against 22 s for the in-memory index. The indexes are
+  sorted through temporary files in the pool (`temp_store = FILE` while they are made), not in memory: a
+  WebAssembly heap never gives memory back, and the sort took as much of it as the indexes are large.
+  The similar-name tables do the same: during such a scan only the names are written, and their trigrams
+  and trigram counts are made from them in one pass at the end (`FuzzyTitles.bulk`).
 
 ## Real Roam run (GitHub Actions)
 
@@ -102,8 +144,13 @@ The vault is the generated one from `test/vault-gen.mjs`, written to disk.
 
 It runs on demand: Actions > Profile > Run workflow, with the vault sizes (for example
 `10000,100000,1000000`) and the branches, tags or commits to compare (for example
-`main,claude/some-branch`; the first is the one the others are compared with). It also runs, at 10,000
-notes, on pull requests that change the profiler itself, but not on other pull requests.
+`main,claude/some-branch`; the first is the one the others are compared with).
+
+It also runs on every pull request that changes the extension, at 10,000 notes, with the base branch
+against the PR, and fails when the PR is clearly worse: a number that is both a multiple of the base's
+and well over it (`test/real-roam/gate.mjs` has the limits, which are wide because one run's numbers move
+about). A PR that looks worse is measured a second time, base and all, and only what is over the limit
+both times fails the run. The summary names what failed. Larger vaults are not profiled on pull requests.
 
 Each size is its own job; read its summary or download the `profile-<size>` artifact (RESULTS.md,
 profile.json, the memory log and screenshots). All builds of a job run one after another on the same

@@ -736,6 +736,7 @@ async function openViewer(path, line, act) {
 var STUCK_MSG = "Roam couldn't open that folder. macOS protects folders like Documents, Desktop and your home folder, and Roam gives no error when you pick one. Quit Roam (Cmd+Q), reopen it, and choose the vault folder inside instead, for example Documents/My Vault.";
 var pending = null;
 var stuck = false;
+var inDesktopApp = () => /\bElectron\//.test(navigator.userAgent) || window.roamAlphaAPI?.platform?.isDesktop === true;
 async function pickVaultFolder() {
   const w = window;
   if (!w.showDirectoryPicker) {
@@ -763,9 +764,11 @@ async function pickVaultFolder() {
     document.removeEventListener("keydown", watchdog, true);
     window.removeEventListener("focus", watchdog);
   };
-  document.addEventListener("pointerdown", watchdog, true);
-  document.addEventListener("keydown", watchdog, true);
-  window.addEventListener("focus", watchdog);
+  if (inDesktopApp()) {
+    document.addEventListener("pointerdown", watchdog, true);
+    document.addEventListener("keydown", watchdog, true);
+    window.addEventListener("focus", watchdog);
+  }
   pending = (async () => {
     try {
       return await w.showDirectoryPicker({ id: "roam-vaults", mode: "read" });

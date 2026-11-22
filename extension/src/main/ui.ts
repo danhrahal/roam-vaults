@@ -213,7 +213,7 @@ function sectionHead(label: string, open = true, tools: HTMLElement[] = []) {
 function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[], showVault: boolean): HTMLElement {
   const out = h('div', { class: 'rv-groups' });
   /** One note: caret + (vault/)path as a namespaced title (+ tag); content shows when open. The open-in-editor button lives in the viewer. */
-  const group = (v: PanelVault, key: string, path: string, defOpen: boolean, tag: string | undefined, content: () => HTMLElement, cls = '', marks: number[] = []) => {
+  const group = (v: PanelVault, key: string, path: string, defOpen: boolean, tag: string | undefined, content: () => HTMLElement, cls = '', marks: number[] = [], dim = 0) => {
     const k = `${v.id}\n${key}\n${path}`;
     const box = h('div', { class: 'rv-content' });
     const c = caret(false, 'rm-caret-showing rv-group-caret');
@@ -233,7 +233,10 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
       h('div', { class: 'flex-h-box rv-group-head' }, c,
         h('div', { class: 'rm-ref-page-view-title rv-group-title' },
           h('span', { class: 'rv-note', onclick: () => v.act.view(path) },
-            showVault ? h('span', { class: 'rv-vault' }, `${v.name}/`) : null, ...marked(path.replace(/\.md$/i, ''), path.lastIndexOf('/') + 1, marks))),
+            showVault ? h('span', { class: 'rv-vault' }, `${v.name}/`) : null,
+            // A note in a folder named like the page: the path above that folder in the same grey.
+            dim ? h('span', { class: 'rv-vault' }, path.slice(0, dim)) : null,
+            ...marked(path.slice(dim).replace(/\.md$/i, ''), path.lastIndexOf('/') + 1 - dim, marks))),
         tag ? h('span', { class: 'rv-tagref' }, `#${tag}`) : null),
       box);
   };
@@ -269,7 +272,7 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
   // Notes inside a folder named like the page: listed like any note, by their path in the vault.
   for (const { v, r } of list) for (const f of r.inFolders ?? []) {
     const tag = tagOnce(v, f.path);
-    rows.push(() => group(v, 'folder', f.path, false, tag, preview(v, f.path)));
+    rows.push(() => group(v, 'folder', f.path, false, tag, preview(v, f.path), '', [], f.from));
   }
   for (const { v, r } of list) for (const t of r.tagged) {
     const tag = tagOnce(v, t.path);

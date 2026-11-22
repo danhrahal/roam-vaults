@@ -225,12 +225,13 @@ async function main() {
   fs.writeFileSync(path.join(folder, 'Files', 'Budget.md'), 'A note one folder further in.\n');
   fs.writeFileSync(path.join(folder, 'Files', 'spec.pdf'), '%PDF-1.4\n');
   const folderRows = () => evalIn((dir) => [...document.querySelectorAll('.roam-article .rv-panel .rv-group')]
-    .map((g) => ({ title: g.querySelector('.rv-note')?.textContent.trim() ?? '', folded: g.querySelector('.rv-content')?.hidden }))
+    .map((g) => ({ title: g.querySelector('.rv-note')?.textContent.trim() ?? '', folded: g.querySelector('.rv-content')?.hidden, grey: [...g.querySelectorAll('.rv-note .rv-vault')].map((x) => x.textContent).join('') }))
     .filter((r) => r.title.includes(dir)), `Projects/${TEST_PAGE}/`);
   const listed = await waitFor('the folder\'s notes to be listed', async () => { const r = await folderRows(); return r.length === 2 && r; }, 20000).catch(() => null);
   check('Notes in a folder named like the page are listed, without a Rescan, the nearest first',
     JSON.stringify(listed?.map((r) => r.title.slice(r.title.indexOf('Projects/')))) === JSON.stringify([`Projects/${TEST_PAGE}/Plan`, `Projects/${TEST_PAGE}/Files/Budget`]), JSON.stringify(listed ?? await folderRows()));
   check('They are folded, and the other file in the folder is not listed', !!listed?.every((r) => r.folded === true) && !(await panelText()).includes('spec.pdf'));
+  check('The path above the folder is grey', !!listed?.every((r) => r.grey.endsWith('Projects/')), JSON.stringify(listed?.map((r) => r.grey)));
   const tHead = await panelText();
   check('Each counts as an External Vault Reference', tHead.includes(`${before + 2} External Vault References`), tHead.split('\n')[0]);
   check('Nothing is drawn for the folder itself', await evalIn(() => !document.querySelector('.rv-panel .rv-file, .rv-panel .rv-count, .rv-panel .rv-files')));

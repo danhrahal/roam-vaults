@@ -413,7 +413,12 @@ test('the notes in a folder named like the page are listed, the nearest first', 
   const home = await e.query('Home');
   assert.deepEqual(home.counterparts.map((c) => c.path), ['Areas/Home/Home.md', 'Other/Home.md']);
   assert.deepEqual(home.backlinks.map((b) => b.path), ['Areas/Home/Bills/2026.md']);
-  assert.deepEqual(home.inFolders, [{ path: 'Areas/Home/Garden.md', title: 'Garden' }]);
+  // `from`: where the folder named like the page starts in the path.
+  assert.deepEqual(home.inFolders, [{ path: 'Areas/Home/Garden.md', title: 'Garden', from: 6 }]);
+  assert.deepEqual((await e.query('Areas/Home')).inFolders.map((n) => n.from), [0, 0, 0], 'a folder at the top of the vault');
+  assert.deepEqual((await e.query('P - Build the shed')).inFolders.map((n) => n.path.slice(n.from).split('/')[0]),
+    ['p - build the SHED', 'P - Build the shed', 'P - Build the shed']);
+  assert.deepEqual((await e.query('_PROJECTS/P - Build the shed')).inFolders.map((n) => n.path.slice(0, n.from)), ['Work/', 'Work/']);
 
   // A folder of the same name inside a matched one (a copy kept in a subfolder) adds nothing twice.
   fs.write('Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md', 'draft\n');

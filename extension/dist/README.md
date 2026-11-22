@@ -49,7 +49,8 @@ kinds of notes, in this order:
 - **Notes in a folder named like this page.** A vault kept by folder, with one folder per project or area,
   often has no links back to the page. So every note inside a folder with the page's name (in any letter
   case, anywhere in the vault) is listed too, folded, the folder's own notes first and then the notes in its
-  subfolders. For a Roam page `A/B`, the folder's path must end in `A/B`.
+  subfolders. The part of the path above that folder is grey, so the folder's name stands out. For a Roam
+  page `A/B`, the folder's path must end in `A/B`.
 - **Notes tagged here.** These are notes tagged `#this-page`, shown with the tag. A Roam namespace `a/b`
   matches the nested tag `#a/b`.
 - **Notes with a similar name**, only when no note is this page. These are notes whose name or alias is

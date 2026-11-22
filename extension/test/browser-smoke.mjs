@@ -231,6 +231,8 @@ ok('a note in a folder named like the page is listed by its path, folded', folde
   && (await p.locator('.rv-note').first().textContent()) === 'Résumés/2026/Q4/Café plan'
   && (await p.locator('.rv-sec-head strong').textContent()) === '1 External Vault References'
   && await p.locator('.rv-group').first().locator('.rv-content').evaluate((e) => e.hidden));
+ok('the path above the folder is grey, like a vault name', await p.locator('.rv-note').first().evaluate((e) =>
+  e.querySelector('.rv-vault')?.textContent === 'Résumés/2026/' && getComputedStyle(e.querySelector('.rv-vault')).color !== getComputedStyle(e).color));
 ok('nothing new is drawn for the folder itself', await p.evaluate(() => !document.querySelector('.rv-panel .rv-file, .rv-panel .rv-count')));
 ok('no hover tooltips in the section', await p.evaluate(() => !document.querySelector('.rv-panel [title]')));
 await p.locator('.rv-group-caret').first().click();

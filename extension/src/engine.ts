@@ -170,9 +170,9 @@ export class VaultEngine {
     const errors: string[] = [];
     const before = idx.noteCount();
     // Everything the index has: what the walk comes across is taken out, and the rest is gone. A
-    // database takes a moment to list it, so it is asked when the walk's first files come in, after
-    // the pages that were waiting for this vault have had their answers.
-    let left: Map<string, Stamp | null> | undefined;
+    // database lists it a piece at a time, and answers the pages waiting for this vault in between.
+    const listed: Promise<Map<string, Stamp | null>> = Promise.resolve(idx.stamps());
+    listed.catch(() => {}); // a failure is the scan's to report, when it asks
     let files = 0, reread = 0, done = 0, changed = false;
     const empty = idx.isEmpty();
     try {
@@ -180,7 +180,7 @@ export class VaultEngine {
       await this.scan(async (batch, read) => {
         files += batch.length;
         const want: number[] = [];
-        const had = left ??= idx.stamps();
+        const had = await listed;
         batch.forEach((f, k) => {
           const c = had.get(f.path);
           had.delete(f.path);
@@ -208,7 +208,7 @@ export class VaultEngine {
         // An index with nothing in it yet has no number of notes to count towards.
         if (before) onProgress?.(done, Math.max(done, before));
       });
-      for (const p of (left ?? idx.stamps()).keys()) {
+      for (const p of (await listed).keys()) {
         this.forget(p);
         idx.removeFile(p);
         if (MD.test(p)) this.save(p, null);

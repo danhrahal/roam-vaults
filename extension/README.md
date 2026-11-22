@@ -4,7 +4,7 @@
 
 See notes from your Obsidian-style vaults in your Roam graph.
 
-![External Vault References on a Roam page, listing notes from two vaults](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/one-section.png)
+![External Vault References on a Roam page, listing notes from two vaults below Linked References](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/one-section.png)
 
 </div>
 
@@ -54,13 +54,21 @@ kinds of notes, in this order:
   folded, with the letters that differ highlighted. Every word must start with the same letter and keep its
   numbers, so `Q3 Plan` never matches `Q4 Plan`, and titles under five letters don't get them.
 
-![The matching note, work-vault/Planning, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/unfolded-note.png)
+![The note that is the page, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/unfolded-note.png)
 
 Click a note title or line to read the whole note in Roam. Links between notes work inside the viewer.
 If you use Obsidian, click **Open in Obsidian** in the viewer to jump to the note there. To use another
 editor, see [Opening notes in another editor](#opening-notes-in-another-editor).
 
-![The note viewer, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/note-viewer.png)
+![The note viewer, opened from a line, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/note-viewer.png)
+
+### Notes with a similar name
+
+When no note is named after the page, the section suggests notes whose name is close to it, so a typo or
+another spelling doesn't hide a note. Here the page is **Fertiliser schedule** and the note is
+`Soil/Fertilizer schedule`:
+
+![A note with a similar name, faded, with the letter that differs highlighted](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/similar-name.png)
 
 The section updates by itself. When you edit a note in Obsidian or any other editor, the change shows up in Roam within about a
 second.
@@ -79,9 +87,11 @@ second.
 2. Open **Settings → Roam Depot → Vaults**.
 3. Click **Add vault folder**, choose your vault folder, and allow access when asked.
 
+![The Vaults settings tab, with two vaults and the Open notes with field](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/settings.png)
+
 Matching notes then show up below Linked References, as **"External Vault References"**. The
 section appears only on pages that have matching vault notes. Other pages look exactly as before. The first
-scan of a large vault takes a few seconds. After that, only changed files are read again.
+scan reads every note. After that, only changed files are read again.
 
 Choose the vault folder itself, such as `Documents/My Vault`, not a folder above it like `Documents` or
 your home folder. You can't type a folder path: Roam can only read a folder you pick in the system's
@@ -95,13 +105,31 @@ Everything is in **Settings → Roam Depot → Vaults**:
   page, each title starting with its vault's name.
 - Each vault shows its status here, such as its note count, "Indexing" or "Needs permission again".
   The page itself never shows indexing or permission notices.
-- **Remove** forgets that vault on this computer and deletes its cache. Your files aren't touched.
+- While a vault is scanned, its row shows a progress bar. Pages keep showing the vault's notes meanwhile.
+- **Remove** forgets that vault on this computer and deletes its index. Your files aren't touched.
 - **Reconnect** appears when Roam needs your permission again to read a vault.
 - **"Last scan didn't finish"** means Roam crashed while reading that vault. It isn't read again until
   you click **Rescan** in its row (see [Troubleshooting](#troubleshooting)).
 - **Rescan** reads every vault again, except one whose last scan didn't finish. Only changed files are parsed.
 
+![A vault part way through a scan, with a progress bar in its row](https://raw.githubusercontent.com/sweenzor/roam-vaults/84a778cb7e5a0007230ee99702fdffbc369a6c95/docs/images/scan-progress.png)
+
 Vaults adds no commands to the command palette.
+
+### Large vaults
+
+Vaults keeps its index of your notes in a database on this computer instead of in memory, so a large vault
+costs little while Roam is open. Measured in Roam's desktop app with a vault of 100,000 notes:
+
+| | |
+| --- | --- |
+| First scan | about 20 seconds |
+| Memory the vault takes once scanned | about 35 MB |
+| A page shows its vault notes after Roam starts | about 2 seconds |
+
+After a start, pages show vault notes from the saved index straight away, and the files are checked for
+changes in the background. If you open the graph in a second Roam window or tab, it uses the first
+window's index instead of reading the vault again.
 
 ## Troubleshooting
 
@@ -135,10 +163,11 @@ row. If it keeps happening, remove the vault or choose a smaller folder.
 <summary><b>A note I expect isn't listed</b></summary>
 
 Check that it matches one of the rules in [What it shows](#what-it-shows): same name, an alias, the
-same folder path, the same daily-note date, a `[[link]]` or a `#tag`. Similar titles aren't matched
-yet. Only `.md` files are read. If you just changed the note and it doesn't show yet, click **Rescan**.
+same folder path, the same daily-note date, a `[[link]]` or a `#tag`. A note with a similar name is only
+suggested on a page that no note is named after. Only `.md` files are read. If you just changed the note and it doesn't show yet, click **Rescan**.
 
 </details>
+
 ### Opening notes in another editor
 
 The viewer's button opens notes in Obsidian. To open them in another editor instead, fill in **Open notes
@@ -162,11 +191,11 @@ The setting applies to every vault, so this works when your vaults sit in the sa
 
 - **Read-only.** The extension reads your vault folder and never changes it. It never writes vault content
   into your Roam graph.
-- **Stays on this computer.** The extension makes no network requests. Your vault folder, and the cache of
-  parsed notes that makes later starts fast, are kept in the Roam app's storage on this computer. They aren't
-  stored in your graph and don't sync to your other devices or to other people in a shared graph.
+- **Stays on this computer.** The extension makes no network requests. Which folders your vaults are, and
+  the index of their notes that makes later starts fast, are kept in the Roam app's storage on this computer.
+  They aren't stored in your graph and don't sync to your other devices or to other people in a shared graph.
 - **Folder access you control.** The extension can only read folders you choose. Removing a vault deletes
-  its saved folder access and its cache of parsed notes.
+  its saved folder access and its index.
 - **Who sees the section.** The section is drawn on your screen only. Collaborators on a shared graph don't
   see your vault unless they install the extension and add a vault themselves.
 

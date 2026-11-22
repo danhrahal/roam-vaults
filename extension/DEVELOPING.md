@@ -148,6 +148,32 @@ To run it by hand: install the Roam `.deb` and Xvfb, start `Xvfb :99`, then
 `DISPLAY=:99 ROAM_EMAIL=… ROAM_PASSWORD=… node test/real-roam/run.mjs` (`NOTES=2000` for a quicker run).
 A Roam profile that is already signed in skips the sign-in.
 
+## README screenshots (GitHub Actions)
+
+The README's pictures are taken in real Roam by `test/real-roam/screenshots.mjs`: it signs in to the test
+graph, adds two small vaults about a garden (and a generated one to catch a scan part way), and
+photographs the page section, an unfolded note, the note viewer, a note with a similar name, the settings
+tab and a scan's progress bar, at twice the pixel density. `.github/workflows/screenshots.yml` runs it,
+commits the PNGs to `docs/images` on the branch it ran for, and points the README's image links at that
+commit, since Roam Depot shows the README and needs links pinned to a commit. Run it from Actions >
+Screenshots > Run workflow on the release branch (it refuses the default branch). Its push gets no checks
+of its own, so run it before the last commit of a release. A feature that changes how something looks
+gets its picture in the script, so the next run retakes it.
+
+## Releasing
+
+Before every release to Roam Depot:
+
+1. Every feature has a section in `README.md` with a picture of it, and the README reads well as the
+   extension's page in Roam Depot.
+2. Run the Screenshots workflow on the release branch, so every picture shows the build being released,
+   and look at each one.
+3. Set the release date in `CHANGELOG.md`; `package.json` has the version.
+4. After the release branch is merged, run Real Roam on `main` (Actions > Real Roam > Run workflow), and
+   check that the commit the README's image links are pinned to is on `main`.
+5. Bump `source_commit` in the Roam Depot metadata to that `main` commit and open the Roam Depot pull
+   request (`docs/DEPOT-SUBMISSION.md`).
+
 ## Profiling (GitHub Actions)
 
 `.github/workflows/profile.yml` runs `test/real-roam/profile.mjs` in the same real Roam as the run above

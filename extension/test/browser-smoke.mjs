@@ -180,14 +180,23 @@ const cacheKeys = () => p.evaluate(() => new Promise((res, rej) => {
   };
 }));
 await p.waitForTimeout(2500); // let the worker's debounced cache save land
+// Each vault's index is a SQLite database in the private file system, which is also its cache:
+// the IndexedDB cache is emptied once the database is open.
+const databases = () => p.evaluate(async () => {
+  const out = [];
+  try { for await (const [name, h] of (await (await navigator.storage.getDirectory()).getDirectoryHandle('.roam-vaults')).entries()) if (h.kind === 'directory') out.push(name); }
+  catch { /* none */ }
+  return out;
+});
 const cached = await cacheKeys();
-ok('each note is cached under its vault and path', cached.keys.includes('Work Notes | Alpha budget.md') && cached.keys.includes('My Vault | Projects/Project Alpha.md') && cached.keys.includes('My Vault | Fresh idea.md') && cached.keys.includes('My Vault | R\u00e9sum\u00e9s/2026/Q4/Caf\u00e9 plan.md') && cached.keys.length === 6);
+ok('each vault has its own SQLite database', (await databases()).length === 2);
+ok('the IndexedDB cache is left empty', cached.keys.length === 0);
 ok('the single-record cache of 0.1.0 is gone', cached.stores.join() === 'notes');
 ok('settings list shows both vaults', (await p.locator('#settings-box .rv-settings-row').count()) === 2);
 if (process.argv[2]) await p.locator('#settings-box').screenshot({ path: process.argv[2].replace(/\.png$/, '-settings.png') });
 await p.locator('#settings-box .rv-settings-row', { hasText: 'Work Notes' }).locator('button', { hasText: 'Remove' }).click();
 
-ok('remove deletes only that vault\'s cache', await p.waitForFunction(() => true).then(async () => { await p.waitForTimeout(300); const { keys } = await cacheKeys(); return !keys.some((k) => k.startsWith('Work Notes | ')) && keys.filter((k) => k.startsWith('My Vault | ')).length === 5; }));
+ok('remove deletes only that vault\'s database', await p.waitForFunction(() => true).then(async () => { await p.waitForTimeout(500); return (await databases()).length === 1; }));
 ok('settings list updates after remove', await p.waitForFunction(() => document.querySelectorAll('#settings-box .rv-settings-row').length === 1, null, { timeout: 3000 }).then(() => true, () => false));
 ok('remove drops only that vault', await p.waitForFunction(() => { const t = document.querySelector('.rv-panel').textContent; return !t.includes('Alpha budget') && t.includes('5 External Vault References') && !t.includes('My Vault/'); }, null, { timeout: 3000 }).then(() => true, () => false));
 
@@ -285,7 +294,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   ok('it is not scanned, and nothing shows on the page', t.includes("Last scan didn't finish") && !/\d+ notes?/.test(t) && !(await q.evaluate(() => document.querySelector('.rv-panel')?.textContent.trim())));
   ok('its row has Rescan and Remove inside the settings column', (await q.locator('.rv-settings-btns button').allTextContents()).join() === 'Rescan,Remove' && (await fits(q, 670)).inside && (await fits(q, 285)).inside);
   await q.evaluate(() => document.querySelector('.rv-settings-btns button').click());
-  ok('its Rescan scans it and clears the mark', await rowHas(q, '1 note') && await q.evaluate(() => localStorage.getItem('roam-vaults:scanning:My Vault') === null));
+  ok('its Rescan scans it and clears the mark', await rowHas(q, 'My Vault1 note') && await q.evaluate(() => localStorage.getItem('roam-vaults:scanning:My Vault') === null));
   await q.context().close();
 }
 { // a crash can lose localStorage, so the mark is also kept in IndexedDB, written to disk at once
@@ -311,7 +320,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   await q.evaluate(() => localStorage.setItem('roam-vaults:closed:My Vault', 't2'));
   await onloadSaved(q);
   await mountSettings(q);
-  ok('a mark whose scan was closed with Roam (not a crash) scans as usual', await rowHas(q, '1 note'));
+  ok('a mark whose scan was closed with Roam (not a crash) scans as usual', await rowHas(q, 'My Vault1 note'));
   await q.context().close();
 }
 { // a scan writes its mark to IndexedDB with strict durability and deletes it when done
@@ -324,7 +333,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   });
   await mountSettings(q);
   await press(q, 'Add vault folder');
-  await rowHas(q, '1 note');
+  await rowHas(q, 'My Vault1 note');
   await q.waitForTimeout(500);
   const left = await q.evaluate(() => new Promise((res) => { const r = indexedDB.open('roam-vaults-marks', 1); r.onsuccess = () => { const g = r.result.transaction('scanning').objectStore('scanning').count(); g.onsuccess = () => { r.result.close(); res(g.result); }; }; }));
   ok('the IndexedDB mark is written strictly while scanning and gone after', await q.evaluate(() => window.__idb.length >= 2 && window.__idb.every((d) => d === 'strict')) && left === 0);
@@ -340,7 +349,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   });
   await mountSettings(q);
   await press(q, 'Add vault folder');
-  await rowHas(q, '1 note');
+  await rowHas(q, 'My Vault1 note');
   await q.waitForTimeout(300);
   ok('a scan marks the vault while it runs and clears the mark when done', await q.evaluate(() =>
     window.__marks.includes('roam-vaults:scanning:My Vault') && localStorage.getItem('roam-vaults:scanning:My Vault') === null));
@@ -359,7 +368,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
     }).observe(document.querySelector('#settings-box'), { childList: true, subtree: true });
   });
   await press(q, 'Add vault folder');
-  await rowHas(q, '1 note');
+  await rowHas(q, 'My Vault1 note');
   const first = await bars();
   if (process.env.RV_DEBUG) console.log('bars, first scan', first);
   ok('a first scan shows the striped bar above its status, with no total to count towards', first.length > 0 && first[0].startsWith('striped 100% Indexing'));
@@ -376,7 +385,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   await q.evaluate(() => window.__ext.onload({ extensionAPI: window.__api }));
   await mountSettings(q);
   await press(q, 'Add vault folder');
-  await rowHas(q, '1 note');
+  await rowHas(q, 'My Vault1 note');
   const wide = await fits(q, 670), mid = await fits(q, 450), narrow = await fits(q, 285);
   if (process.env.RV_DEBUG) console.log('control column widths', wide.column, mid.column, narrow.column);
   ok('in a 1024 px window Remove sits beside the vault name, inside the column', wide.inside && wide.beside);

@@ -6,10 +6,12 @@
 import { VaultEngine, inFolder, scanByList, type VaultFS, type FileMeta, type Cache, type ReadBatch } from './engine.ts';
 import { walk, madeHandles, textOf, obsidianFilters } from './walk.ts';
 import { runWalker, type FromWalker, type ToWalker } from './walker.ts';
-import { readNotes, writeNotes } from './cache-db.ts';
+import { readNotes, writeNotes, deleteNotes } from './cache-db.ts';
 import { intern } from './core/parser.ts';
 import { NONE } from './core/vault-index.ts';
 import { VaultIgnore, GITIGNORE } from './core/ignore.ts';
+import { openDb } from './sql/db.ts';
+import { SqlIndex } from './sql/sql-index.ts';
 import type { Note } from './core/types.ts';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -27,6 +29,9 @@ let dirs = new Map<string, FileSystemDirectoryHandle>();
 let diskNames = new Map<string, string>();
 // What the vault's .gitignore files and Obsidian's Excluded files leave out, as of the last scan.
 let rules = new VaultIgnore();
+// The index in SQLite, when the page handed over SQLite's compiled wasm: kept in the origin private
+// file system across starts, so it is also the parse cache and the IndexedDB one is not used.
+let store: SqlIndex | null = null;
 let live = false;      // is the file watcher running?
 let notLiveWhy = '';
 
@@ -277,8 +282,8 @@ async function flush() {
     if (await e.refresh(paths)) changed = true;
   } finally { refreshing = false; }
   if (!changed || e !== engine) return;
-  saveCacheSoon(e);
-  if (shown === 'ready') status('ready', noteCount(e.idx.notes.size));
+  if (!store) saveCacheSoon(e);
+  if (shown === 'ready') status('ready', noteCount(e.idx.noteCount()));
   post({ type: 'changed', paths: [...paths, ...folders.map((f) => f.path)] });
 }
 /** Start the file watcher. Whether it is running goes out with every status message. */
@@ -300,28 +305,44 @@ async function build() {
   try {
     if (!root) throw new Error('The vault is not connected.');
     const formats = await dailyFormats();
-    // A vault scanned in an earlier session answers from its saved notes straight away. Its files
-    // are then checked like those of any vault that has an index: the index stays in use, and
-    // only what differs on disk is changed in it.
-    if (!engine) {
+    const current = (e: VaultEngine) => e.dailyFormats.join('\n') === formats.join('\n');
+    let e = engine;
+    if (store) {
+      // The database is the index, kept across starts and changed in place by every scan. A new
+      // daily note format needs a new matcher on it.
+      if (!e || !current(e)) {
+        e?.matcher.detach();
+        e = new VaultEngine(handleFS, formats, store);
+        // What an earlier session left answers straight away, unless its first scan never
+        // finished: that is a part of the vault, shown once the rest is in.
+        if (engine || store.scanned) engine = e;
+      }
+    } else if (!e) {
+      // A vault scanned in an earlier session answers from its saved notes straight away.
       const cache = await loadCache(vaultKey);
-      if (cache.size) (engine = new VaultEngine(handleFS, formats)).adopt(cache);
+      if (cache.size) (e = engine = new VaultEngine(handleFS, formats)).adopt(cache);
     }
-    const e = engine;
-    if (e && e.dailyFormats.join('\n') === formats.join('\n')) {
-      const notes = () => noteCount(e.idx.notes.size);
+    // The files of a vault that has an index are checked against it: the index stays in use, and
+    // only what differs on disk is changed in it.
+    if (e && (store || current(e))) {
+      const scanned = e, answers = engine === e;
+      const notes = () => noteCount(scanned.idx.noteCount());
       // After a scan that failed, pages show nothing from this vault until one succeeds.
       const failed = shown === 'error';
-      const progress = (text: string) => failed ? status('indexing', text) : status('ready', notes(), text);
+      const progress = (text: string) => failed || !answers ? status('indexing', text) : status('ready', notes(), text);
       progress('reading files');
-      const stats = await e.check((done, total) => progress(`${done} of ${total} notes`));
-      saveCacheSoon(e);
+      let stats;
+      try { stats = await scanned.check((done, total) => progress(`${done} of ${total} notes`)); }
+      catch (err) { if (!answers) scanned.matcher.detach(); throw err; }
+      if (store) store.markScanned(); else saveCacheSoon(scanned);
+      engine = scanned;
       status('ready', notes());
-      if (stats.changed) post({ type: 'changed', paths: [] });
+      if (stats.changed || !answers) post({ type: 'changed', paths: [] });
       return stats;
     }
-    // A first scan, or the vault's daily note format changed: a new index, built in one go. The
-    // one in use stays in place until it is complete, and its notes are the cache for the new one.
+    // Without a database: a first scan, or the vault's daily note format changed. A new index,
+    // built in one go. The one in use stays in place until it is complete, and its notes are the
+    // cache for the new one.
     if (e) status('indexing', 'reading files');
     const next = new VaultEngine(handleFS, formats);
     const stats = await next.build(e ? e.cache : new Map(), (done, total) => status('indexing', `${done} of ${total} notes`));
@@ -351,8 +372,17 @@ function scan(): Scan {
 }
 
 const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
-  async open({ handle, key }) {
-    if (key !== vaultKey) { engine = null; unsaved = new Map(); }
+  async open({ handle, key, wasm }) {
+    if (key !== vaultKey) { engine = null; unsaved = new Map(); store?.close(); store = null; }
+    if (wasm && !store) {
+      try {
+        const o = await openDb(key, wasm);
+        store = new SqlIndex(o.db);
+        if (!o.persistent) console.warn('[roam-vaults] index kept in memory:', o.why);
+        // The database is the cache now: what the in-memory index kept in IndexedDB goes.
+        else deleteNotes(key).catch(() => { /* the cache is only an optimisation */ });
+      } catch (e) { console.warn('[roam-vaults] SQLite unavailable, using the in-memory index', e); }
+    }
     root = handle; vaultKey = key; dirs = new Map(); diskNames = new Map(); rules = new VaultIgnore();
     await watch(); // before the scan, so a file edited while it runs is not missed
     return scan();
@@ -361,7 +391,7 @@ const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
   query: ({ title }) => engine ? engine.query(title) : null,
   read: ({ path }) => engine!.read(path),
   resolve: ({ target, from }) => engine?.resolve(target, from) ?? null,
-  close() { observer?.disconnect(); observer = null; engine = null; root = null; return true; },
+  close() { observer?.disconnect(); observer = null; engine = null; root = null; store?.close(); store = null; return true; },
 };
 
 self.onmessage = async ({ data }) => {

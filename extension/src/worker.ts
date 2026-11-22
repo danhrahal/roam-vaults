@@ -3,7 +3,7 @@
 //
 // The same file is also the walker: for every full scan the indexer starts a second worker from
 // its own URL and hands it the vault (see walker.ts for why).
-import { VaultEngine, inFolder, scanByList, type VaultFS, type FileMeta, type Cache, type ReadBatch } from './engine.ts';
+import { VaultEngine, LINES_AT_FIRST, inFolder, scanByList, type VaultFS, type FileMeta, type Cache, type ReadBatch } from './engine.ts';
 import { walk, madeHandles, textOf, obsidianFilters } from './walk.ts';
 import { runWalker, type FromWalker, type ToWalker } from './walker.ts';
 import { readNotes, writeNotes, deleteNotes } from './cache-db.ts';
@@ -388,7 +388,8 @@ const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {
     return scan();
   },
   rescan: () => scan(),
-  query: ({ title }) => engine ? engine.query(title) : null,
+  query: ({ title }) => engine ? engine.query(title, LINES_AT_FIRST) : null,
+  lines: ({ items }) => engine ? engine.lines(items) : (items as unknown[]).map(() => null),
   read: ({ path }) => engine!.read(path),
   resolve: ({ target, from }) => engine?.resolve(target, from) ?? null,
   close() { observer?.disconnect(); observer = null; engine = null; root = null; store?.close(); store = null; return true; },

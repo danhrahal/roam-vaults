@@ -476,6 +476,53 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   await q.context().close();
 }
 
+{ // the lines of linking notes are read as their notes are drawn, not all with the page
+  const q = await fresh();
+  await q.setViewportSize({ width: 900, height: 700 });
+  const LINKERS = 150;
+  await q.evaluate(async (LINKERS) => {
+    const wrap = document.createElement('div'); wrap.id = 'scroller'; wrap.style.cssText = 'height:100vh;overflow:auto';
+    document.body.prepend(wrap); wrap.append(document.querySelector('.roam-article'));
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    for (let i = 0; i < LINKERS; i++) {
+      const w = await (await vault.getFileHandle(`Linker ${String(i).padStart(3, '0')}.md`, { create: true })).createWritable();
+      await w.write(`intro\n- line of linker ${i} [[Project Alpha]]\n`); await w.close();
+    }
+    await window.__ext.onload({ extensionAPI: window.__api });
+  }, LINKERS);
+  await mountSettings(q);
+  await press(q, 'Add vault folder');
+  await q.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('Linker 000'), null, { timeout: 15000 });
+  const blocks = () => q.evaluate(() => [...document.querySelectorAll('.rv-group')].filter((g) => /^Linker \d+$/.test(g.querySelector('.rv-note').textContent))
+    .map((g) => g.querySelector('.rv-block-text')?.textContent ?? null));
+  const first = await blocks();
+  ok('the first linking notes come with their lines', first.length > 40 && first.length <= 60 && (await q.locator('.rv-group').count()) === 60 && first.every((t, i) => t === `line of linker ${i} [[Project Alpha]]`));
+  let n = await q.locator('.rv-group').count();
+  for (let i = 0; i < 20; i++) {
+    await q.evaluate(() => { const s = document.querySelector('#scroller'); s.scrollTop = s.scrollHeight; });
+    await q.waitForFunction((n) => document.querySelectorAll('.rv-group').length > n, n, { timeout: 3000 }).catch(() => {});
+    const now = await q.locator('.rv-group').count();
+    if (now === n) break;
+    n = now;
+  }
+  const all = await blocks();
+  ok('notes drawn on scrolling are drawn with their lines', all.length === LINKERS && all.every((t, i) => t === `line of linker ${i} [[Project Alpha]]`));
+  // drawn again after a change, the list is as long as before, and every line is there when it is drawn
+  await q.evaluate(async () => {
+    const vault = await (await navigator.storage.getDirectory()).getDirectoryHandle('My Vault');
+    const w = await (await vault.getFileHandle('Linker 000.md', { create: true })).createWritable();
+    await w.write('- line of linker 0, edited [[Project Alpha]]\n'); await w.close();
+    window.__empty = 0;
+    new MutationObserver(() => { window.__empty += [...document.querySelectorAll('.rv-group .rv-block-text')].filter((b) => !b.textContent).length; })
+      .observe(document.querySelector('.roam-article'), { childList: true, subtree: true });
+  });
+  await q.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('line of linker 0, edited'), null, { timeout: 5000 }).catch(() => {});
+  const again = await blocks();
+  ok('a list drawn again after a change has every line when it is drawn', again.length === LINKERS && again[0] === 'line of linker 0, edited [[Project Alpha]]'
+    && again.slice(1).every((t, i) => t === `line of linker ${i + 1} [[Project Alpha]]`) && await q.evaluate(() => window.__empty) === 0);
+  await q.context().close();
+}
+
 for (const [n, pass] of checks) console.log(pass ? 'PASS' : 'FAIL', n);
 await browser.close(); server.close();
 process.exit(checks.every(([, pass]) => pass) ? 0 : 1);

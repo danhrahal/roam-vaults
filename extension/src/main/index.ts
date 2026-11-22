@@ -5,8 +5,8 @@ import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
 import { createSettingsPanel, scanProgress, type SettingsVault } from './settings.ts';
-import { ATTR, installStyles, renderPanel, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
-import type { PageResult } from '../engine.ts';
+import { ATTR, installStyles, renderPanel, drawnRows, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
+import type { PageResult, Backlink } from '../engine.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
 import { SQL_DIR, poolName } from '../sql/pool-name.ts';
 
@@ -64,6 +64,7 @@ class Vault implements PanelVault {
       reconnect: () => this.connect(true),
       remove: () => removeVault(this),
       view: (path, line) => openViewer(path, line, viewer),
+      lines: (notes) => this.lines(notes),
     };
   }
   call<T>(cmd: string, args?: unknown): Promise<T> {
@@ -126,7 +127,9 @@ class Vault implements PanelVault {
       this.set({ kind: 'error', detail: (e as Error).message });
     }
   }
-  async query(title: string): Promise<PageResult | null> {
+  /** What the vault has for a page. `lines`: how many of its linking notes are needed with the
+   *  text of their lines (a page drawn again is drawn as far as it had got). */
+  async query(title: string, lines = 0): Promise<PageResult | null> {
     if (this.state.kind !== 'ready') return null;
     let r = this.results.get(title);
     if (r !== undefined) { this.results.delete(title); this.results.set(title, r); } // most recently used last
@@ -138,7 +141,18 @@ class Vault implements PanelVault {
         if (this.results.size > MAX_RESULTS) this.results.delete(this.results.keys().next().value!);
       }
     }
+    if (r && lines) await this.lines(r.backlinks.slice(0, lines)).catch(() => {});
     return r;
+  }
+  /** Read the lines of linking notes that came without their text, and put it in them. */
+  async lines(notes: Backlink[]) {
+    const need = notes.filter((b) => b.unread);
+    if (!need.length) return;
+    const texts = await this.call<(string[] | null)[]>('lines', { items: need.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })) });
+    need.forEach((b, i) => {
+      texts[i]?.forEach((t, j) => { if (b.lines[j]) b.lines[j].text = t; });
+      delete b.unread;
+    });
   }
   /** Scan the folder again. A vault that still needs permission has nothing to scan. */
   async rescan() {
@@ -237,7 +251,7 @@ async function fill(panel: HTMLElement) {
   fills.set(panel, seq);
   const snapshot = vaults.slice();
   const states = await Promise.all(snapshot.map(async (v): Promise<PanelVault> =>
-    v.state.kind === 'ready' ? { id: v.id, name: v.name, act: v.act, state: { ...v.state, result: await v.query(title) } } : v));
+    v.state.kind === 'ready' ? { id: v.id, name: v.name, act: v.act, state: { ...v.state, result: await v.query(title, drawnRows(panel)) } } : v));
   // A fill started later carries newer results, so this one must not draw over it.
   if (fills.get(panel) !== seq || panel.dataset.title !== title || !panel.isConnected) return;
   renderPanel(panel, states);

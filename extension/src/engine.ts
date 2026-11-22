@@ -31,7 +31,11 @@ export type Cache = Map<string, Note>;
 
 export interface Counterpart { path: string; title: string; how: NoteHow; label: string }
 export interface BacklinkLine { line: number; text: string; embed: boolean; unresolved: boolean }
-export interface Backlink { path: string; title: string; lines: BacklinkLine[] }
+export interface Backlink {
+  path: string; title: string; lines: BacklinkLine[];
+  /** The note has not been read for the text of its lines yet: lines() reads it. */
+  unread?: true;
+}
 export interface Tagged { path: string; title: string; tag: string }
 export interface PageResult {
   title: string;
@@ -70,6 +74,9 @@ const MAX_FUZZY = 5;
 /** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
 const MAX_TEXT_CHARS = 1_000_000;
 const READS_AT_ONCE = 16;
+/** Linking notes whose lines a page asks for with its result: as many as it draws at first. Most of
+ *  what a page costs is reading those notes, so the rest are read when they are scrolled to. */
+export const LINES_AT_FIRST = 60;
 /** Files handed over at a time by a scan. */
 export const SCAN_BATCH = 500;
 
@@ -340,8 +347,9 @@ export class VaultEngine {
     return changed;
   }
 
-  /** Everything the vault knows about one Roam page title. */
-  async query(title: string): Promise<PageResult> {
+  /** Everything the vault knows about one Roam page title. The lines of the first `withLines`
+   *  linking notes come with their text; the others are marked `unread`, for lines() to read. */
+  async query(title: string, withLines = Infinity): Promise<PageResult> {
     const a = this.matcher.associations(title);
     const counterparts: Counterpart[] = a.notes
       .filter((n) => TIER_LABEL[n.how])
@@ -357,16 +365,16 @@ export class VaultEngine {
       if (arr.some((x) => x.line === l.line)) continue;
       arr.push({ line: l.line, text: '', embed: l.embed, unresolved: l.via !== 'backlink' });
     }
-    const srcs = [...bySrc.keys()]
-      .sort((x, y) => noteTitle(x).localeCompare(noteTitle(y)) || (x < y ? -1 : x > y ? 1 : 0))
+    const backlinks: Backlink[] = [...bySrc]
+      .map(([path, lines]): Backlink => ({ path, title: noteTitle(path), lines }))
+      .sort((x, y) => x.title.localeCompare(y.title) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0))
       .slice(0, MAX_BACKLINK_NOTES);
-    const backlinks: Backlink[] = srcs.map((src) => ({ path: src, title: noteTitle(src), lines: bySrc.get(src)!.sort((x, y) => x.line - y.line) }));
-    for (let i = 0; i < backlinks.length; i += READS_AT_ONCE) {
-      await Promise.all(backlinks.slice(i, i + READS_AT_ONCE).map(async (b) => {
-        const text = await this.text(b.path);
-        if (text !== null) for (const l of b.lines) l.text = snippet(lineAt(text, l.line));
-      }));
-    }
+    for (const b of backlinks) b.lines.sort((x, y) => x.line - y.line);
+    const first = backlinks.slice(0, withLines);
+    const texts = await this.lines(first.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })));
+    first.forEach((b, i) => texts[i]?.forEach((t, j) => { b.lines[j].text = t; }));
+    for (let i = first.length; i < backlinks.length; i++) backlinks[i].unread = true;
+    const srcs = backlinks.map((b) => b.path);
     const seenTag = new Set<string>();
     const tagged: Tagged[] = [];
     for (const t of a.tagged) if (!seenTag.has(t.path)) { seenTag.add(t.path); tagged.push({ path: t.path, title: noteTitle(t.path), tag: t.tag }); }
@@ -383,6 +391,18 @@ export class VaultEngine {
       const name = noteTitle(h.path);
       return { path: h.path, title: name, score: h.score, sim: h.sim, marks: h.kind === NAME ? diffMarks(name, title).flat() : [] };
     });
+  }
+
+  /** The text of some lines of some notes, as a page shows them. Null for a note that can't be read. */
+  async lines(items: { path: string; lines: number[] }[]): Promise<(string[] | null)[]> {
+    const out: (string[] | null)[] = items.map(() => null);
+    for (let i = 0; i < items.length; i += READS_AT_ONCE) {
+      await Promise.all(items.slice(i, i + READS_AT_ONCE).map(async (it, k) => {
+        const text = await this.text(it.path);
+        if (text !== null) out[i + k] = it.lines.map((n) => snippet(lineAt(text, n)));
+      }));
+    }
+    return out;
   }
 
   async read(path: string): Promise<string> { return this.fs.readText(path); }

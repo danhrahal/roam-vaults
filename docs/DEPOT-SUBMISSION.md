@@ -38,7 +38,7 @@ that only touch `.md` or image files are published without resetting the "code u
 
 `source_subdir` isn't in the README, but the Depot build script supports it: it runs `build.sh` inside that
 folder, then copies `extension.js`, `extension.css`, `README.md` and `CHANGELOG.md` from it to the root.
-That lets the extension stay in `extension/` next to the spike and docs.
+That lets the extension stay in `extension/` next to the docs.
 
 ## Files the Depot reads
 

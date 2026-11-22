@@ -158,6 +158,8 @@ async function main() {
   // load through Roam Depot developer mode
   await loadDevExtension();
   check('Extension loads through Roam Depot developer mode', true);
+  // The folder picker's hang guard (src/main/picker.ts) is on only where this is true.
+  check('Roam desktop is recognised as the desktop app', await evalIn(() => /\bElectron\//.test(navigator.userAgent) || window.roamAlphaAPI?.platform?.isDesktop === true), await evalIn(() => `${navigator.userAgent} isDesktop=${window.roamAlphaAPI?.platform?.isDesktop}`));
   await openPage(TEST_PAGE);
   await sleep(2000);
   check('Nothing on the page before a vault is added', (await panelText()).trim() === '');

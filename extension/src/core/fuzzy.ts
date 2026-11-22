@@ -2,7 +2,7 @@
 // Candidates come from core/fuzzy-index.ts; this module decides which of them are close enough
 // and how close, and which letters differ (for display).
 //
-// Ported from the tabled ranker (old PR #1, spike/src/core/ranker.ts), keeping its guards:
+// Ported from the tabled ranker (old PR #1), keeping its guards:
 //   - keys are folded (case, diacritics, fullwidth, curly quotes, dashes, "&") and reduced to
 //     words of letters and digits, so "Café – Notes" and "cafe notes" are the same key;
 //   - similarity is the better of optimal-string-alignment (typos, transpositions) and the same

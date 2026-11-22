@@ -16,10 +16,6 @@ export function roamDailyToIso(title: string): string | null {
   const mo = MONTHS.indexOf(m[1]) + 1, d = +m[2], y = +m[3];
   return validIso(y, mo, d);
 }
-export function isoToRoamDaily(iso: string): string {
-  const [y, mo, d] = iso.split('-').map(Number);
-  return `${MONTHS[mo - 1]} ${ord(d)}, ${y}`;
-}
 function validIso(y: number, mo: number, d: number): string | null {
   const dt = new Date(Date.UTC(y, mo - 1, d));
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;

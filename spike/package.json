@@ -1,8 +1,0 @@
-{
-  "name": "roam-vault-spike",
-  "private": true,
-  "type": "module",
-  "devDependencies": {
-    "yaml": "^2.9.1"
-  }
-}

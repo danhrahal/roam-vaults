@@ -12,6 +12,12 @@ const STUCK_MSG =
 let pending: Promise<FileSystemDirectoryHandle | null> | null = null;
 let stuck = false;
 
+/** Roam's desktop app. Only it has the silent hang. In a browser the promise also stays pending
+ *  after the folder dialog has closed, while the browser asks whether the site may view the
+ *  files, so the watchdog below would call that a hang. */
+export const inDesktopApp = (): boolean =>
+  /\bElectron\//.test(navigator.userAgent) || (window as any).roamAlphaAPI?.platform?.isDesktop === true;
+
 export async function pickVaultFolder(): Promise<FileSystemDirectoryHandle | null> {
   const w = window as any;
   if (!w.showDirectoryPicker) { notify("This version of Roam can't open local folders.", 'error'); return null; }
@@ -31,9 +37,11 @@ export async function pickVaultFolder(): Promise<FileSystemDirectoryHandle | nul
     document.removeEventListener('keydown', watchdog, true);
     window.removeEventListener('focus', watchdog);
   };
-  document.addEventListener('pointerdown', watchdog, true);
-  document.addEventListener('keydown', watchdog, true);
-  window.addEventListener('focus', watchdog);
+  if (inDesktopApp()) {
+    document.addEventListener('pointerdown', watchdog, true);
+    document.addEventListener('keydown', watchdog, true);
+    window.addEventListener('focus', watchdog);
+  }
 
   pending = (async () => {
     try {

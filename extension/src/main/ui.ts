@@ -154,7 +154,7 @@ export function renderPanel(el: HTMLElement, vaults: PanelVault[]): number {
     const s = v.state;
     if (s.kind !== 'ready' || !s.result) continue;
     ready.push({ v, r: s.result });
-    n += new Set([...s.result.counterparts, ...s.result.backlinks, ...s.result.tagged, ...(s.result.fuzzy ?? [])].map((x) => x.path)).size;
+    n += new Set([...s.result.counterparts, ...s.result.backlinks, ...s.result.tagged, ...(s.result.inFolders ?? []), ...(s.result.fuzzy ?? [])].map((x) => x.path)).size;
   }
   if (!n) { el.replaceChildren(); return 0; }
   const collapsed = isCollapsed();
@@ -209,7 +209,7 @@ function sectionHead(label: string, open = true, tools: HTMLElement[] = []) {
 }
 
 /** Notes from every ready vault: the notes that are this page first, then notes linking here,
- *  then notes only tagged here. With more than one vault, each title starts with its vault name. */
+ *  then notes in a folder named like the page, then notes only tagged here. With more than one vault, each title starts with its vault name. */
 function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[], showVault: boolean): HTMLElement {
   const out = h('div', { class: 'rv-groups' });
   /** One note: caret + (vault/)path as a namespaced title (+ tag); content shows when open. The open-in-editor button lives in the viewer. */
@@ -265,6 +265,11 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
       if (b.unread) v.act.lines([b]).then(draw, () => {});
       return box;
     }));
+  }
+  // Notes inside a folder named like the page: listed like any note, by their path in the vault.
+  for (const { v, r } of list) for (const f of r.inFolders ?? []) {
+    const tag = tagOnce(v, f.path);
+    rows.push(() => group(v, 'folder', f.path, false, tag, preview(v, f.path)));
   }
   for (const { v, r } of list) for (const t of r.tagged) {
     const tag = tagOnce(v, t.path);

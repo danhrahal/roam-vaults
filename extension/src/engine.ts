@@ -37,14 +37,15 @@ export interface Backlink {
   unread?: true;
 }
 export interface Tagged { path: string; title: string; tag: string }
-/** A folder named like the page, with the files under it as paths inside the folder. */
-export interface FolderMatch { path: string; files: string[]; total: number }
+/** A note inside a folder named like the page. */
+export interface FolderNote { path: string; title: string }
 export interface PageResult {
   title: string;
-  folders: FolderMatch[];
   counterparts: Counterpart[];
   backlinks: Backlink[];
   tagged: Tagged[];
+  /** Notes inside folders named like the page, at any depth, that are not listed above. */
+  inFolders: FolderNote[];
   /** Notes whose name or alias is close to the title (typos, word order), when no note is this
    *  page. Shown last, set apart from the rest. */
   fuzzy: FuzzyNote[];
@@ -74,8 +75,7 @@ const MAX_LINE = 240;
 const MAX_BACKLINK_NOTES = 200;
 /** Close-named notes shown under a page with no matching note. */
 const MAX_FUZZY = 5;
-const MAX_FOLDERS = 20;
-const MAX_FOLDER_FILES = 20_000;
+const MAX_FOLDER_NOTES = 20_000;
 /** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
 const MAX_TEXT_CHARS = 1_000_000;
 const READS_AT_ONCE = 16;
@@ -385,9 +385,12 @@ export class VaultEngine {
     for (const t of a.tagged) if (!seenTag.has(t.path)) { seenTag.add(t.path); tagged.push({ path: t.path, title: noteTitle(t.path), tag: t.tag }); }
     tagged.sort((x, y) => x.title.localeCompare(y.title) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
     // Close names only for a page no note is: next to an exact match they would mostly be noise.
-    const shown = new Set([...strong, ...srcs, ...tagged.map((t) => t.path)]);
+    const shown = new Set([...strong, ...srcs]);
+    const inFolders = this.inFolders(title, shown);
+    for (const n of inFolders) shown.add(n.path);
+    for (const t of tagged) shown.add(t.path);
     const fuzzy = counterparts.length ? [] : this.fuzzy(title, MAX_FUZZY).filter((f) => !shown.has(f.path));
-    return { title, folders: this.folders(title), counterparts, backlinks, tagged, fuzzy };
+    return { title, counterparts, backlinks, tagged, inFolders, fuzzy };
   }
 
   /** Notes whose name or alias is close to a page title, best first. */
@@ -410,15 +413,21 @@ export class VaultEngine {
     return out;
   }
 
-  /** Folders named like the page, each with the files under it. */
-  private folders(title: string): FolderMatch[] {
-    // A folder inside one already listed (a copy kept in a subfolder, say) is shown by that one.
+  /** The notes inside folders named like the page, without those the page lists already. The
+   *  notes nearest the folder come first: its own notes, then each level of subfolders. */
+  private inFolders(title: string, shown: Set<string>): FolderNote[] {
+    // A folder inside one already found (a copy kept in a subfolder, say) is covered by that one.
     const dirs: string[] = [];
     for (const d of this.idx.foldersNamed(title)) if (!dirs.some((top) => d.startsWith(top + '/'))) dirs.push(d);
-    return dirs.slice(0, MAX_FOLDERS).map((dir) => {
-      const all = this.idx.filesUnder(dir).map((p) => p.slice(dir.length + 1));
-      return { path: dir, total: all.length, files: all.slice(0, MAX_FOLDER_FILES) };
-    });
+    const out: { path: string; title: string; depth: number }[] = [];
+    for (const dir of dirs) for (const path of this.idx.notePathsIn(dir)) {
+      if (shown.has(path)) continue;
+      let depth = 0;
+      for (let i = dir.length + 1; (i = path.indexOf('/', i) + 1) > 0;) depth++;
+      out.push({ path, title: noteTitle(path), depth });
+    }
+    out.sort((x, y) => x.depth - y.depth || x.path.localeCompare(y.path));
+    return out.slice(0, MAX_FOLDER_NOTES).map(({ path, title }) => ({ path, title }));
   }
 
   async read(path: string): Promise<string> { return this.fs.readText(path); }

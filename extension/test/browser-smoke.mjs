@@ -224,18 +224,19 @@ ok('counts of zero are left out', await p.waitForFunction(() => document.querySe
 await p.evaluate(() => window.__settings.settings.find((s) => s.id === 'reference-counts').action.onChange({ target: { checked: false } }));
 ok('turning the switch off removes the counts line', await p.waitForFunction(() => !document.querySelector('.rv-counts'), null, { timeout: 3000 }).then(() => true, () => false));
 
-// a folder named like the page: listed folded, with the files under it; a note in it opens the viewer
+// a folder named like the page: the notes in it are listed like any note, and open in the viewer
 await p.evaluate(() => { window.roamAlphaAPI.pull = () => ({ ':node/title': 'Q4' }); window.dispatchEvent(new HashChangeEvent('hashchange')); });
 const folderShown = await p.waitForFunction(() => document.querySelector('.rv-panel')?.dataset.title === 'Q4' && document.querySelector('.rv-panel').textContent.includes('Q4/'), null, { timeout: 3000 }).then(() => true, () => false);
-ok('a folder named like the page is listed, folded, with its file count', folderShown
-  && (await p.locator('.rv-note').first().textContent()) === 'R\u00e9sum\u00e9s/2026/Q4/'
-  && (await p.locator('.rv-count').first().textContent()) === '1'
+ok('a note in a folder named like the page is listed by its path, folded', folderShown
+  && (await p.locator('.rv-note').first().textContent()) === 'Résumés/2026/Q4/Café plan'
+  && (await p.locator('.rv-sec-head strong').textContent()) === '1 External Vault References'
   && await p.locator('.rv-group').first().locator('.rv-content').evaluate((e) => e.hidden));
+ok('nothing new is drawn for the folder itself', await p.evaluate(() => !document.querySelector('.rv-panel .rv-file, .rv-panel .rv-count')));
 await p.locator('.rv-group-caret').first().click();
-ok('unfolding the folder lists its notes', (await p.locator('.rv-file .rv-file-name').first().textContent()) === 'Caf\u00e9 plan');
-await p.locator('.rv-file').first().click();
+ok('its caret shows the note in place', await p.waitForFunction(() => document.querySelector('.rv-group .rv-preview')?.textContent.trim().length > 0, null, { timeout: 3000 }).then(() => true, () => false));
+await p.locator('.rv-note').first().click();
 await p.waitForSelector('.rv-viewer');
-ok('a note in the folder opens in the viewer', (await p.locator('.rv-viewer h3').textContent()) === 'Caf\u00e9 plan');
+ok('its title opens the note in the viewer', (await p.locator('.rv-viewer h3').textContent()) === 'Café plan');
 if (process.argv[2]) await p.screenshot({ path: process.argv[2].replace(/\.png$/, '-folder.png') });
 await p.keyboard.press('Escape');
 

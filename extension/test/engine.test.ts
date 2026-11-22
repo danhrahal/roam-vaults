@@ -379,7 +379,7 @@ for (const how of ['listed', 'handed over in batches'] as const) {
   });
 }
 
-test('a folder named like the page lists the files under it, notes first', async () => {
+test('the notes in a folder named like the page are listed, the nearest first', async () => {
   const fs = memFS({
     'Work/_PROJECTS/P - Build the shed/Plan.md': 'plan\n',
     'Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md': 'quote\n',
@@ -387,45 +387,58 @@ test('a folder named like the page lists the files under it, notes first', async
     'Work/_PROJECTS/P - Build the shed/sketch.png': '',
     'Work/_ARCHIVE/p - build the SHED/Old.md': 'old\n',
     'Areas/Home/Garden.md': 'g\n',
+    'Areas/Home/Home.md': 'the folder\'s own note\n',
+    'Areas/Home/Bills/2026.md': 'about [[Home]]\n',
     'Other/Home.md': 'a note, not a folder\n',
+    'Scans/receipt.pdf': '',
   });
   const e = new VaultEngine(fs);
   await e.build();
+  const inFolders = async (title: string) => (await e.query(title)).inFolders.map((n) => n.path);
 
-  const r = await e.query('P - Build the shed');
-  assert.deepEqual(r.folders.map((f) => [f.path, f.total]), [
-    ['Work/_ARCHIVE/p - build the SHED', 1],
-    ['Work/_PROJECTS/P - Build the shed', 4],
+  // Any letter case, at any depth; notes only; a folder's own notes before those in its subfolders.
+  assert.deepEqual(await inFolders('P - Build the shed'), [
+    'Work/_ARCHIVE/p - build the SHED/Old.md',
+    'Work/_PROJECTS/P - Build the shed/Plan.md',
+    'Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md',
   ]);
-  assert.deepEqual(r.folders[1].files.slice().sort(), ['Plan.md', 'Quotes/Lumber.md', 'Quotes/invoice.pdf', 'sketch.png']);
+  assert.deepEqual(await inFolders('Quotes'), ['Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md']);
+  assert.deepEqual(await inFolders('Nothing here'), []);
+  assert.deepEqual(await inFolders('Scans'), [], 'a folder with no note in it is not one');
 
-  // A namespaced title matches a folder by its path's end; a note of the same name stays a counterpart.
-  assert.deepEqual((await e.query('Areas/Home')).folders.map((f) => f.path), ['Areas/Home']);
+  // A namespaced title matches a folder by its path's end.
+  assert.deepEqual(await inFolders('Areas/Home'), ['Areas/Home/Garden.md', 'Areas/Home/Home.md', 'Areas/Home/Bills/2026.md']);
+  assert.deepEqual(await inFolders('Work/Home'), []);
+  // A note that is the page, or links to it, is listed as that, and not again for its folder.
   const home = await e.query('Home');
-  assert.deepEqual(home.folders.map((f) => f.path), ['Areas/Home']);
-  assert.deepEqual(home.counterparts.map((c) => c.path), ['Other/Home.md']);
-  assert.deepEqual((await e.query('Nothing here')).folders, []);
+  assert.deepEqual(home.counterparts.map((c) => c.path), ['Areas/Home/Home.md', 'Other/Home.md']);
+  assert.deepEqual(home.backlinks.map((b) => b.path), ['Areas/Home/Bills/2026.md']);
+  assert.deepEqual(home.inFolders, [{ path: 'Areas/Home/Garden.md', title: 'Garden' }]);
 
-  // A folder of the same name inside a matched one (a copy kept in a subfolder) is left to it.
+  // A folder of the same name inside a matched one (a copy kept in a subfolder) adds nothing twice.
   fs.write('Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md', 'draft\n');
   await e.refresh(['Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md']);
-  const nested = await e.query('P - Build the shed');
-  assert.deepEqual(nested.folders.map((f) => [f.path, f.total]), [['Work/_ARCHIVE/p - build the SHED', 1], ['Work/_PROJECTS/P - Build the shed', 5]]);
+  assert.deepEqual((await inFolders('P - Build the shed')).slice(1), [
+    'Work/_PROJECTS/P - Build the shed/Plan.md',
+    'Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md',
+    'Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md',
+  ]);
   fs.rm('Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md');
   await e.refresh(['Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md']);
 
-  // Files coming and going keep the folder list current; an emptied folder stops matching.
+  // Notes coming and going keep it current; an emptied folder stops matching.
   fs.write('Work/_PROJECTS/P - Build the shed/Notes/Day 1.md', 'day\n');
   await e.refresh(['Work/_PROJECTS/P - Build the shed/Notes/Day 1.md']);
-  assert.equal((await e.query('P - Build the shed')).folders[1].total, 5);
-  assert.deepEqual((await e.query('Notes')).folders.map((f) => f.path), ['Work/_PROJECTS/P - Build the shed/Notes']);
+  assert.deepEqual(await inFolders('Notes'), ['Work/_PROJECTS/P - Build the shed/Notes/Day 1.md']);
+  assert.equal((await inFolders('P - Build the shed')).length, 4);
   fs.rm('Work/_ARCHIVE/p - build the SHED/Old.md');
   await e.refresh(['Work/_ARCHIVE/p - build the SHED/Old.md']);
-  assert.deepEqual((await e.query('P - Build the shed')).folders.map((f) => f.path), ['Work/_PROJECTS/P - Build the shed']);
+  assert.equal((await inFolders('P - Build the shed')).length, 3);
+  assert.deepEqual(e.idx.foldersNamed('p - build the shed'), ['Work/_PROJECTS/P - Build the shed']);
 
-  // A folder moved to the archive is found at its new path, with all its files.
+  // A folder moved to the archive is found at its new path, with all its notes.
   fs.mv('Work/_PROJECTS/P - Build the shed', 'Work/_ARCHIVE/2026_11 - P - Build the shed');
   await e.refreshFolders([{ path: 'Work/_ARCHIVE/2026_11 - P - Build the shed', from: 'Work/_PROJECTS/P - Build the shed' }]);
-  assert.deepEqual((await e.query('P - Build the shed')).folders, []);
-  assert.equal((await e.query('2026_11 - P - Build the shed')).folders[0].total, 5);
+  assert.deepEqual(await inFolders('P - Build the shed'), []);
+  assert.equal((await inFolders('2026_11 - P - Build the shed')).length, 3);
 });

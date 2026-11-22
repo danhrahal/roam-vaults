@@ -37,7 +37,7 @@ those as well as `[[wikilinks]]`.
 
 One section covers every vault you add, and its count is the total across vaults. Notes are titled by
 their path in the vault, such as `Projects/Kernel meeting protocol`. With more than one vault, the vault
-name comes first in grey, such as `work-vault/Projects/Kernel meeting protocol`. The section lists four
+name comes first in grey, such as `work-vault/Projects/Kernel meeting protocol`. The section lists five
 kinds of notes, in this order:
 
 - **The note that is this page**, listed first and folded. A note matches when it has the same name (in any
@@ -46,6 +46,10 @@ kinds of notes, in this order:
   the note and read it in place.
 - **Notes that link here.** These are notes that link to the matching note, or contain `[[This Page]]` even
   when no such note exists. Links in frontmatter count too. Each linking line is shown like a Roam block.
+- **Notes in a folder named like this page.** A vault kept by folder, with one folder per project or area,
+  often has no links back to the page. So every note inside a folder with the page's name (in any letter
+  case, anywhere in the vault) is listed too, folded, the folder's own notes first and then the notes in its
+  subfolders. For a Roam page `A/B`, the folder's path must end in `A/B`.
 - **Notes tagged here.** These are notes tagged `#this-page`, shown with the tag. A Roam namespace `a/b`
   matches the nested tag `#a/b`.
 - **Notes with a similar name**, only when no note is this page. These are notes whose name or alias is
@@ -175,7 +179,7 @@ row. If it keeps happening, remove the vault or choose a smaller folder.
 <summary><b>A note I expect isn't listed</b></summary>
 
 Check that it matches one of the rules in [What it shows](#what-it-shows): same name, an alias, the
-same folder path, the same daily-note date, a `[[link]]` or a `#tag`. A note with a similar name is only
+same folder path, the same daily-note date, a `[[link]]`, a `#tag`, or a folder with the page's name. A note with a similar name is only
 suggested on a page that no note is named after. Only `.md` files are read. If you just changed the note and it doesn't show yet, click **Rescan**.
 
 </details>

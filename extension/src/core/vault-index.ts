@@ -17,7 +17,7 @@ const MD = /\.md$/i;
 /** The one empty list every note without links, tags or aliases shares. */
 export const NONE: never[] = Object.freeze([]) as never[];
 export const nfcLower = (s: string) => s.normalize('NFC').toLowerCase();
-const dirOf = (p: string) => { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); };
+export const dirOf = (p: string) => { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); };
 export const baseOf = (p: string) => { const i = p.lastIndexOf('/'); return i < 0 ? p : p.slice(i + 1); };
 
 /** Key for a link target: "Folder/Note.md" -> "folder/note"; "img.PNG" -> "img.png". */
@@ -67,7 +67,7 @@ export class VaultIndex {
   linkers = new Map<string, (Note | number)[]>();
   aliasIdx = new Map<string, string[]>();               // nfcLower(alias) -> paths
   tagIdx = new Map<string, string[]>();                 // nfcLower(tag) -> paths (incl. parent tags)
-  /** Every folder that holds a file, at any depth -> how many files are under it. */
+  /** Every folder that holds a note, at any depth -> how many notes are under it. */
   dirs = new Map<string, number>();
   /** nfcLower(folder name) -> the folders with that name. */
   dirByName = new Map<string, string[]>();
@@ -82,7 +82,7 @@ export class VaultIndex {
     this.files.set(path, nameKey);
     const arr = this.byName.get(nameKey);
     if (arr) arr.push(path); else this.byName.set(nameKey, [path]);
-    for (let d = dirOf(path); d; d = dirOf(d)) {
+    if (MD.test(path)) for (let d = dirOf(path); d; d = dirOf(d)) {
       const n = this.dirs.get(d);
       this.dirs.set(d, (n ?? 0) + 1);
       if (n === undefined) push(this.dirByName, nfcLower(baseOf(d)), d);
@@ -96,7 +96,7 @@ export class VaultIndex {
     const arr = this.byName.get(nameKey)!;
     arr.splice(arr.indexOf(path), 1);
     if (!arr.length) this.byName.delete(nameKey);
-    for (let d = dirOf(path); d; d = dirOf(d)) {
+    if (MD.test(path)) for (let d = dirOf(path); d; d = dirOf(d)) {
       const n = this.dirs.get(d)! - 1;
       if (n) { this.dirs.set(d, n); continue; }
       this.dirs.delete(d);
@@ -110,17 +110,13 @@ export class VaultIndex {
   foldersNamed(title: string): string[] {
     const key = nfcLower(title.normalize('NFC')).replace(/^\/+|\/+$/g, '');
     if (!key) return [];
-    const cands = this.dirByName.get(baseOf(key)) ?? NONE;
+    const cands = this.dirsNamed(baseOf(key));
     const hit = key.includes('/') ? cands.filter((d) => { const k = nfcLower(d); return k === key || k.endsWith('/' + key); }) : cands.slice();
     return hit.sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0));
   }
 
-  /** The files under a folder, at any depth. */
-  filesUnder(dir: string): string[] {
-    const pre = dir + '/', out: string[] = [];
-    for (const p of this.files.keys()) if (p.startsWith(pre)) out.push(p);
-    return out;
-  }
+  /** The folders with this name (lowercase) that hold a note, at any depth. */
+  dirsNamed(name: string): readonly string[] { return this.dirByName.get(name) ?? NONE; }
 
   // ---------- resolution ----------
   /** All files a link target could mean, best first. */
@@ -273,6 +269,12 @@ export class VaultIndex {
     for (const [p, n] of this.notes) if (p.startsWith(folder + '/')) out.push(n);
     return out;
   }
+  /** The paths of the notes inside a folder, at any depth. */
+  notePathsIn(folder: string): string[] {
+    const out: string[] = [];
+    for (const p of this.notes.keys()) if (p.startsWith(folder + '/')) out.push(p);
+    return out;
+  }
   /** Lookup keys the matcher adds per note (daily-note dates, for one), path by key. */
   private extra = new Map<string, string[]>();
   addKey(key: string, path: string) { push(this.extra, key, path); }
@@ -377,4 +379,12 @@ function pull<V>(m: Map<string, V[]>, k: string, v: V) {
   const i = list.indexOf(v);
   if (i >= 0) { list[i] = list[list.length - 1]; list.pop(); }
   if (!list.length) m.delete(k);
+}
+
+/** The folders above some notes, at any depth, each with how many of those notes are under it:
+ *  rows of path, lowercase name, count. */
+export function dirCounts(paths: Iterable<string>, by = 1): [string, string, number][] {
+  const n = new Map<string, number>();
+  for (const p of paths) for (let d = dirOf(p); d; d = dirOf(d)) n.set(d, (n.get(d) ?? 0) + by);
+  return [...n].map(([d, c]) => [d, nfcLower(baseOf(d)), c]);
 }

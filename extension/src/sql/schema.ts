@@ -5,8 +5,9 @@
 // let the next scan read the vault again.
 
 import { fuzzyMigration } from './fuzzy.ts';
+import { dirCounts } from '../core/vault-index.ts';
 
-type Db = { exec(sql: string): unknown };
+type Db = { exec(sql: string | { sql: string; bind?: unknown[] }): unknown; selectValues?(sql: string): unknown[] };
 
 export const MIGRATIONS: ((db: Db) => void)[] = [
   (db) => db.exec(`
@@ -36,7 +37,21 @@ export const MIGRATIONS: ((db: Db) => void)[] = [
     fuzzyMigration(db);
     db.exec('DELETE FROM link_names; DELETE FROM note_keys; DELETE FROM notes; DELETE FROM files; DELETE FROM meta;');
   },
+  // Every folder that holds a note, at any depth, with its lowercase name and how many notes are
+  // under it: the folders a page title names are found by name. Filled from the notes already there.
+  (db) => {
+    db.exec(`
+      CREATE TABLE dirs(path TEXT PRIMARY KEY, name TEXT NOT NULL, n INTEGER NOT NULL) WITHOUT ROWID;
+      CREATE INDEX dirs_name ON dirs(name);
+    `);
+    const notes = db.selectValues!('SELECT f.path FROM files f JOIN notes n ON n.id = f.id') as string[];
+    if (notes.length) db.exec({ sql: DIRS_ADD, bind: [JSON.stringify(dirCounts(notes))] });
+  },
 ];
+
+/** Add to (or, with negative counts, take from) the notes counted under some folders: rows from dirCounts. */
+export const DIRS_ADD = `INSERT INTO dirs(path, name, n) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?) WHERE true
+  ON CONFLICT(path) DO UPDATE SET n = n + excluded.n`;
 
 /**
  * The indexes only lookups need, as the steps above made them. A scan into an empty database drops

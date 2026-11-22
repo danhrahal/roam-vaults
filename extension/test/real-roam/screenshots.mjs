@@ -155,9 +155,9 @@ async function main() {
   await roam.page.locator('.roam-article .rv-group-caret').first().click();
   await waitFor('the note to unfold', () => evalIn(() => document.querySelector('.roam-article .rv-preview')?.innerText.includes('Pinch out')), 10000);
   await sleep(300);
-  // the section from its heading to a little below the unfolded note
-  const panel = await boxOf('.roam-article .rv-panel'), preview = await boxOf('.roam-article .rv-preview');
-  await snap('unfolded-note', { x: panel.x - 16, y: panel.y - 16, width: panel.width + 32, height: Math.min(panel.height, preview.y + preview.height - panel.y + 96) + 32 });
+  // the section from its heading to the end of the note after the unfolded one, with no row cut through
+  const panel = await boxOf('.roam-article .rv-panel'), head = await boxOf('.roam-article .rv-sec-head'), next = await boxOf('.roam-article .rv-group:nth-child(2)');
+  await snap('unfolded-note', { x: panel.x - 16, y: head.y - 12, width: panel.width + 32, height: next.y + next.height - head.y + 24 });
   await roam.page.locator('.roam-article .rv-group-caret').first().click();
 
   // 4. The note viewer, opened from a line, with that line marked.

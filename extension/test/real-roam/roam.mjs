@@ -107,28 +107,26 @@ export async function killRoam(signal = 'SIGKILL', grace = 15000) {
   await sleep(1000);
   return signal !== 'SIGKILL' && left.length > 0;
 }
-/** A second Roam window on the page the first one shows, or null if this Roam opens none. */
-export async function secondWindow() {
-  const ctx = roam.browser.contexts()[0];
-  const before = new Set(ctx.pages());
-  const opened = () => ctx.pages().find((p) => !before.has(p) && p.url().includes('roamresearch.com') && !p.url().includes('sw.js')) ?? null;
-  await evalIn(() => { window.open(location.href); }).catch(() => {});
-  let page = null;
-  for (let i = 0; i < 20 && !(page = opened()); i++) await sleep(500);
-  if (!page) {
-    // not through the page: ask the app for a window
-    page = await ctx.newPage().catch(() => null);
-    if (page && !(await page.goto(roam.page.url()).then(() => true, () => false))) { await page.close().catch(() => {}); page = null; }
+/** Roam a second time on the same graph, in a frame of the first: what a second tab is to the
+ *  extension (its own page and workers, on the same storage). The desktop app's window can't be asked
+ *  for a second one from here. Returns the frame, or null if Roam doesn't load in one. */
+export async function secondRoam() {
+  await evalIn(() => {
+    const f = document.createElement('iframe');
+    f.id = 'rv-second-roam'; f.src = location.href;
+    f.style.cssText = 'position:fixed;left:0;top:0;width:1200px;height:760px;border:0;z-index:99999;background:#fff';
+    document.body.append(f);
+  });
+  const el = await roam.page.$('#rv-second-roam');
+  for (let i = 0; i < 180; i++) {
+    const frame = await el.contentFrame().catch(() => null);
+    if (frame && await frame.evaluate(() => !!(window.roamAlphaAPI?.data?.q && document.querySelector('.roam-article'))).catch(() => false)) return frame;
+    await sleep(500);
   }
-  page?.on('console', (m) => { if (m.text().includes('[roam-vaults]')) log('[second window]', m.text().slice(0, 300)); });
-  return page;
+  await closeSecondRoam();
+  return null;
 }
-/** Closes a window secondWindow() opened. False if it is still there. */
-export async function closeWindow(page) {
-  await page.close().catch(() => {});
-  for (let i = 0; i < 10 && !page.isClosed(); i++) { await page.evaluate(() => window.close()).catch(() => {}); await sleep(500); }
-  return page.isClosed();
-}
+export const closeSecondRoam = () => evalIn(() => document.querySelector('#rv-second-roam')?.remove());
 export async function waitFor(label, fn, timeout = 30000, every = 250) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeout) {

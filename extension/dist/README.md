@@ -206,6 +206,8 @@ The setting applies to every vault, so this works when your vaults sit in the sa
 - **Stays on this computer.** The extension makes no network requests. Which folders your vaults are, and
   the index of their notes that makes later starts fast, are kept in the Roam app's storage on this computer.
   They aren't stored in your graph and don't sync to your other devices or to other people in a shared graph.
+  They stay there when the extension is turned off or removed from Roam Depot. To delete them, remove each
+  vault in the settings first.
 - **Folder access you control.** The extension can only read folders you choose. Removing a vault deletes
   its saved folder access and its index.
 - **Who sees the section.** The section is drawn on your screen only. Collaborators on a shared graph don't

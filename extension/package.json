@@ -1,6 +1,6 @@
 {
   "name": "roam-vaults",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Vaults for Roam Research: see notes from your Obsidian-style vaults in your Roam graph.",
@@ -16,6 +16,7 @@
     "typescript": "5.6.3"
   },
   "dependencies": {
+    "@sqlite.org/sqlite-wasm": "3.54.1-build1",
     "ignore": "7.0.14"
   }
 }

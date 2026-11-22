@@ -2,8 +2,10 @@
 // date, and answer "what in the vault relates to this Roam page?". No DOM, no Node
 // APIs, so it runs in the Web Worker and in Node tests alike.
 import { parseNote, clearInterned } from './core/parser.ts';
-import { VaultIndex, toNote } from './core/vault-index.ts';
+import { VaultIndex, toNote, type Stamp } from './core/vault-index.ts';
 import { RoamMatcher, type NoteHow } from './core/matcher.ts';
+import { FuzzyIndex, NAME } from './core/fuzzy-index.ts';
+import { diffMarks } from './core/fuzzy.ts';
 import type { Note } from './core/types.ts';
 
 export interface FileMeta { path: string; size: number; mtime: number }
@@ -29,13 +31,26 @@ export type Cache = Map<string, Note>;
 
 export interface Counterpart { path: string; title: string; how: NoteHow; label: string }
 export interface BacklinkLine { line: number; text: string; embed: boolean; unresolved: boolean }
-export interface Backlink { path: string; title: string; lines: BacklinkLine[] }
+export interface Backlink {
+  path: string; title: string; lines: BacklinkLine[];
+  /** The note has not been read for the text of its lines yet: lines() reads it. */
+  unread?: true;
+}
 export interface Tagged { path: string; title: string; tag: string }
 export interface PageResult {
   title: string;
   counterparts: Counterpart[];
   backlinks: Backlink[];
   tagged: Tagged[];
+  /** Notes whose name or alias is close to the title (typos, word order), when no note is this
+   *  page. Shown last, set apart from the rest. */
+  fuzzy: FuzzyNote[];
+}
+export interface FuzzyNote {
+  path: string; title: string; score: number; sim: number;
+  /** Where the note's name differs from the page title: [start, end) in `title`, flat pairs.
+   *  Empty when the match was an alias. */
+  marks: number[];
 }
 /** `changed`: did the scan leave the index different from how it found it? */
 export interface BuildStats { notes: number; files: number; reread: number; cached: number; changed: boolean; errors: string[]; ms: number }
@@ -54,15 +69,21 @@ const MD = /\.md$/i;
 export const noteTitle = (path: string) => path.slice(path.lastIndexOf('/') + 1).replace(MD, '');
 const MAX_LINE = 240;
 const MAX_BACKLINK_NOTES = 200;
+/** Close-named notes shown under a page with no matching note. */
+const MAX_FUZZY = 5;
 /** Note text kept for the lines shown under a page, in characters (a megabyte or two). */
 const MAX_TEXT_CHARS = 1_000_000;
 const READS_AT_ONCE = 16;
+/** Linking notes whose lines a page asks for with its result: as many as it draws at first. Most of
+ *  what a page costs is reading those notes, so the rest are read when they are scrolled to. */
+export const LINES_AT_FIRST = 60;
 /** Files handed over at a time by a scan. */
 export const SCAN_BATCH = 500;
 
 export class VaultEngine {
   idx = new VaultIndex();
   matcher!: RoamMatcher;
+  fuzzyIdx: FuzzyIndex | undefined;
   /** Notes that changed and paths that went away (null) since the cache was last written. */
   unsaved = new Map<string, Note | null>();
   private texts = new Map<string, string>(); // recently read note texts, oldest first, for snippets
@@ -70,13 +91,24 @@ export class VaultEngine {
 
   private fs: VaultFS;
   readonly dailyFormats: string[];
-  constructor(fs: VaultFS, dailyFormats: string[] = ['YYYY-MM-DD']) { this.fs = fs; this.dailyFormats = dailyFormats; }
+  /** An index kept across starts (a database), or none: the index is built in memory and its
+   *  notes are saved by whoever owns the engine (see `unsaved`). */
+  private store: VaultIndex | null;
+  constructor(fs: VaultFS, dailyFormats: string[] = ['YYYY-MM-DD'], store: VaultIndex | null = null) {
+    this.fs = fs; this.dailyFormats = dailyFormats; this.store = store;
+    if (!store) return;
+    // What the store holds is in use from here on: it is its own cache, and check() is its scan.
+    this.idx = store; store.preferNearby = true;
+    this.matcher = new RoamMatcher(store, { dailyFormats, sanitized: false });
+    store.flush();
+  }
 
   /** The parsed notes, for the next scan to start from. */
   get cache(): Cache { return this.idx.notes; }
 
   /** Full scan. Files whose size and mtime match the cache are not re-read. */
   async build(cache: Cache = new Map(), onProgress?: (done: number, total: number) => void): Promise<BuildStats> {
+    if (this.store) return this.check(onProgress);
     const t0 = Date.now();
     const errors: string[] = [];
     const unsaved = new Map<string, Note | null>();
@@ -129,60 +161,78 @@ export class VaultEngine {
     this.idx.build(notes, other);
     // Only the strong matches are shown, so the weaker lookup tables are not built.
     this.matcher = new RoamMatcher(this.idx, { dailyFormats: this.dailyFormats, sanitized: false });
+    this.fuzzyIdx = undefined; // made on first use, for this index (a database has its own)
     this.texts.clear(); this.textChars = 0;
     clearInterned();
   }
 
   /**
-   * Full scan of a vault that already has an index: the index stays in use and only what differs
-   * on disk is changed in it, so a scan that finds nothing new costs the walk and nothing else.
+   * Full scan into the index in use: only what differs on disk is changed in it, so a scan that
+   * finds nothing new costs the walk and little else. Queries meanwhile see a mix of old and new
+   * notes, each one whole. For an index kept across starts this is every scan, the first included.
    */
   async check(onProgress?: (done: number, total: number) => void): Promise<BuildStats> {
     const t0 = Date.now();
+    const idx = this.idx;
     const errors: string[] = [];
-    const seen = new Set<string>();
-    const before = this.idx.notes.size;
+    const before = idx.noteCount();
+    // Everything the index has: what the walk comes across is taken out, and the rest is gone. A
+    // database lists it a piece at a time, and answers the pages waiting for this vault in between.
+    const listed: Promise<Map<string, Stamp | null>> = Promise.resolve(idx.stamps());
+    listed.catch(() => {}); // a failure is the scan's to report, when it asks
     let files = 0, reread = 0, done = 0, changed = false;
-    await this.scan(async (batch, read) => {
-      files += batch.length;
-      const want: number[] = [];
-      batch.forEach((f, k) => {
-        const c = this.idx.notes.get(f.path);
-        // The index's own copy of the path where it has one: a million more strings would be 100 MB.
-        seen.add(c ? c.path : f.path);
-        if (!MD.test(f.path)) { if (!this.idx.files.has(f.path)) { this.idx.addAttachment(f.path); changed = true; } return; }
-        if (c && c.size === f.size && c.mtime === f.mtime) done++; else want.push(k);
-      });
-      const texts = await read(want);
-      want.forEach((k, j) => {
-        const f = batch[k];
-        done++;
-        this.forget(f.path);
-        try {
-          const note = toNote(parseNote(f.path, readable(texts[j])), f.size, f.mtime);
-          this.idx.upsertNote(note);
-          this.unsaved.set(f.path, note);
-          reread++; changed = true;
-        } catch (e) {
-          errors.push(`${f.path}: ${(e as Error).name}`);
-          // As after build(): a note that can't be read is not in the index.
-          if (this.idx.notes.has(f.path)) { this.idx.removeFile(f.path); this.unsaved.set(f.path, null); changed = true; }
+    const empty = idx.isEmpty();
+    try {
+      if (empty) idx.bulk(true);
+      await this.scan(async (batch, read) => {
+        files += batch.length;
+        const want: number[] = [];
+        const had = await listed;
+        batch.forEach((f, k) => {
+          const c = had.get(f.path);
+          had.delete(f.path);
+          if (!MD.test(f.path)) { if (c === undefined) { idx.addAttachment(f.path); changed = true; } return; }
+          if (c && c.size === f.size && c.mtime === f.mtime) done++; else want.push(k);
+        });
+        const texts = await read(want);
+        const notes: Note[] = [];
+        want.forEach((k, j) => {
+          const f = batch[k];
+          done++;
+          this.forget(f.path);
+          try { notes.push(toNote(parseNote(f.path, readable(texts[j])), f.size, f.mtime)); }
+          catch (e) {
+            errors.push(`${f.path}: ${(e as Error).name}`);
+            // As after build(): a note that can't be read is not in the index.
+            if (idx.hasFile(f.path)) { idx.removeFile(f.path); this.save(f.path, null); changed = true; }
+          }
+        });
+        if (notes.length) {
+          idx.upsertNotes(notes); // the batch at once: a database call costs much more than a row
+          for (const n of notes) this.save(n.path, n);
+          reread += notes.length; changed = true;
         }
+        // An index with nothing in it yet has no number of notes to count towards.
+        if (before) onProgress?.(done, Math.max(done, before));
       });
-      onProgress?.(done, Math.max(done, before));
-    });
-    for (const p of [...this.idx.files.keys()]) {
-      if (seen.has(p)) continue;
-      this.forget(p);
-      this.idx.removeFile(p);
-      if (MD.test(p)) this.unsaved.set(p, null);
-      changed = true;
+      for (const p of (await listed).keys()) {
+        this.forget(p);
+        idx.removeFile(p);
+        if (MD.test(p)) this.save(p, null);
+        changed = true;
+      }
+    } finally {
+      idx.flush(); // a scan that stops part way keeps what it wrote
+      if (empty) idx.bulk(false);
     }
     clearInterned();
     onProgress?.(done, done);
-    const notes = this.idx.notes.size;
+    const notes = idx.noteCount();
     return { notes, files, reread, cached: notes - reread, changed, errors, ms: Date.now() - t0 };
   }
+
+  /** Note a change for the saved cache. An index kept across starts has saved it already. */
+  private save(path: string, note: Note | null) { if (!this.store) this.unsaved.set(path, note); }
 
   private scan(each: (files: FileMeta[], read: ReadBatch) => Promise<void>): Promise<void> {
     return this.fs.scan ? this.fs.scan(each) : scanByList(this.fs, each);
@@ -190,22 +240,25 @@ export class VaultEngine {
 
   /** Re-check specific paths after a watcher event. Returns true if anything changed. */
   async refresh(paths: string[]): Promise<boolean> {
+    try { return await this.refreshPaths(paths); } finally { this.idx.flush(); }
+  }
+  private async refreshPaths(paths: string[]): Promise<boolean> {
     let changed = false;
     for (const path of new Set(paths)) {
       this.forget(path);
       const meta = await this.fs.stat(path).catch(() => null);
-      const known = this.idx.files.has(path);
+      const known = this.idx.hasFile(path);
       if (!meta) {
-        if (known) { this.idx.removeFile(path); if (MD.test(path)) this.unsaved.set(path, null); changed = true; }
+        if (known) { this.idx.removeFile(path); if (MD.test(path)) this.save(path, null); changed = true; }
         continue;
       }
       if (!MD.test(path)) { if (!known) { this.idx.addAttachment(path); changed = true; } continue; }
-      const c = this.idx.notes.get(path);
+      const c = this.idx.stampOf(path);
       if (c && c.size === meta.size && c.mtime === meta.mtime) continue;
       try {
         const note = toNote(parseNote(path, await this.fs.readText(path)), meta.size, meta.mtime);
         this.idx.upsertNote(note);
-        this.unsaved.set(path, note);
+        this.save(path, note);
         changed = true;
       } catch { /* half-written or placeholder file: the next event will retry */ }
     }
@@ -220,6 +273,9 @@ export class VaultEngine {
    * new path instead of being read again. Returns true if anything changed.
    */
   async refreshFolders(folders: { path: string; from?: string }[], concurrency = 16): Promise<boolean> {
+    try { return await this.refreshFoldersNow(folders, concurrency); } finally { this.idx.flush(); }
+  }
+  private async refreshFoldersNow(folders: { path: string; from?: string }[], concurrency: number): Promise<boolean> {
     let changed = false;
     const walk = outermost(folders.map((f) => f.path));
     const clear = new Set<string>();
@@ -229,7 +285,7 @@ export class VaultEngine {
     for (const { path, from } of folders) {
       if (from === undefined || from === path) continue;
       clear.add(from);
-      for (const [p, n] of this.idx.notes) if (p.startsWith(from + '/')) reuse.set(path + p.slice(from.length), n);
+      for (const n of this.idx.notesIn(from)) reuse.set(path + n.path.slice(from.length), n);
     }
     const seen = new Map<string, FileMeta>();
     for (const dir of walk) {
@@ -239,29 +295,37 @@ export class VaultEngine {
         clear.add(dir);
       } catch (e) {
         if ((e as Error)?.name === 'NotFoundError') clear.add(dir);
-        else for (const p of this.idx.files.keys()) if (p.startsWith(dir + '/')) recheck.push(p);
+        else for (const p of this.idx.pathsIn(dir)) recheck.push(p);
       }
     }
+    // An index kept in place moves a note that is unchanged at its new path (keeping what it
+    // knows of the note's text), before what is gone is removed.
+    if (this.idx.inPlace) for (const [to, n] of reuse) {
+      const f = seen.get(to);
+      if (f && n.size === f.size && n.mtime === f.mtime && !this.idx.hasFile(to) && this.idx.moveNote(n.path, to)) changed = true;
+    }
     // What the index has in those folders and is no longer there.
-    for (const p of [...this.idx.files.keys()]) {
-      if (seen.has(p) || !inFolder(p, clear)) continue;
+    for (const dir of outermost([...clear])) for (const p of this.idx.pathsIn(dir)) {
+      if (seen.has(p)) continue;
       this.forget(p);
       this.idx.removeFile(p);
-      if (MD.test(p)) this.unsaved.set(p, null);
+      if (MD.test(p)) this.save(p, null);
       changed = true;
     }
     const toRead: FileMeta[] = [];
     for (const f of seen.values()) {
       if (!MD.test(f.path)) {
-        if (!this.idx.files.has(f.path)) { this.idx.addAttachment(f.path); changed = true; }
+        if (!this.idx.hasFile(f.path)) { this.idx.addAttachment(f.path); changed = true; }
         continue;
       }
-      const c = this.idx.notes.get(f.path) ?? reuse.get(f.path);
+      const at = this.idx.stampOf(f.path);
+      if (at) { if (at.size !== f.size || at.mtime !== f.mtime) toRead.push(f); continue; }
+      // An index kept in place has moved what it could; the rest is read, for its text.
+      const c = this.idx.inPlace ? undefined : reuse.get(f.path);
       if (!c || c.size !== f.size || c.mtime !== f.mtime) { toRead.push(f); continue; }
-      if (c.path === f.path) continue;
       const note = { ...c, path: f.path };
       this.idx.upsertNote(note);
-      this.unsaved.set(f.path, note);
+      this.save(f.path, note);
       changed = true;
     }
     let i = 0;
@@ -272,19 +336,20 @@ export class VaultEngine {
         try {
           const note = toNote(parseNote(f.path, await this.fs.readText(f.path)), f.size, f.mtime);
           this.idx.upsertNote(note);
-          this.unsaved.set(f.path, note);
+          this.save(f.path, note);
           changed = true;
         } catch { /* half-written or placeholder file: the next event will retry */ }
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, toRead.length) }, work));
-    if (await this.refresh(recheck)) changed = true;
+    if (await this.refreshPaths(recheck)) changed = true;
     clearInterned();
     return changed;
   }
 
-  /** Everything the vault knows about one Roam page title. */
-  async query(title: string): Promise<PageResult> {
+  /** Everything the vault knows about one Roam page title. The lines of the first `withLines`
+   *  linking notes come with their text; the others are marked `unread`, for lines() to read. */
+  async query(title: string, withLines = Infinity): Promise<PageResult> {
     const a = this.matcher.associations(title);
     const counterparts: Counterpart[] = a.notes
       .filter((n) => TIER_LABEL[n.how])
@@ -300,21 +365,44 @@ export class VaultEngine {
       if (arr.some((x) => x.line === l.line)) continue;
       arr.push({ line: l.line, text: '', embed: l.embed, unresolved: l.via !== 'backlink' });
     }
-    const srcs = [...bySrc.keys()]
-      .sort((x, y) => noteTitle(x).localeCompare(noteTitle(y)) || (x < y ? -1 : x > y ? 1 : 0))
+    const backlinks: Backlink[] = [...bySrc]
+      .map(([path, lines]): Backlink => ({ path, title: noteTitle(path), lines }))
+      .sort((x, y) => x.title.localeCompare(y.title) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0))
       .slice(0, MAX_BACKLINK_NOTES);
-    const backlinks: Backlink[] = srcs.map((src) => ({ path: src, title: noteTitle(src), lines: bySrc.get(src)!.sort((x, y) => x.line - y.line) }));
-    for (let i = 0; i < backlinks.length; i += READS_AT_ONCE) {
-      await Promise.all(backlinks.slice(i, i + READS_AT_ONCE).map(async (b) => {
-        const text = await this.text(b.path);
-        if (text !== null) for (const l of b.lines) l.text = snippet(lineAt(text, l.line));
-      }));
-    }
+    for (const b of backlinks) b.lines.sort((x, y) => x.line - y.line);
+    const first = backlinks.slice(0, withLines);
+    const texts = await this.lines(first.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })));
+    first.forEach((b, i) => texts[i]?.forEach((t, j) => { b.lines[j].text = t; }));
+    for (let i = first.length; i < backlinks.length; i++) backlinks[i].unread = true;
+    const srcs = backlinks.map((b) => b.path);
     const seenTag = new Set<string>();
     const tagged: Tagged[] = [];
     for (const t of a.tagged) if (!seenTag.has(t.path)) { seenTag.add(t.path); tagged.push({ path: t.path, title: noteTitle(t.path), tag: t.tag }); }
     tagged.sort((x, y) => x.title.localeCompare(y.title) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
-    return { title, counterparts, backlinks, tagged };
+    // Close names only for a page no note is: next to an exact match they would mostly be noise.
+    const shown = new Set([...strong, ...srcs, ...tagged.map((t) => t.path)]);
+    const fuzzy = counterparts.length ? [] : this.fuzzy(title, MAX_FUZZY).filter((f) => !shown.has(f.path));
+    return { title, counterparts, backlinks, tagged, fuzzy };
+  }
+
+  /** Notes whose name or alias is close to a page title, best first. */
+  fuzzy(title: string, limit = 10): FuzzyNote[] {
+    return (this.idx.fuzzy(title, limit) ?? (this.fuzzyIdx ??= new FuzzyIndex(this.idx)).match(title, limit)).map((h) => {
+      const name = noteTitle(h.path);
+      return { path: h.path, title: name, score: h.score, sim: h.sim, marks: h.kind === NAME ? diffMarks(name, title).flat() : [] };
+    });
+  }
+
+  /** The text of some lines of some notes, as a page shows them. Null for a note that can't be read. */
+  async lines(items: { path: string; lines: number[] }[]): Promise<(string[] | null)[]> {
+    const out: (string[] | null)[] = items.map(() => null);
+    for (let i = 0; i < items.length; i += READS_AT_ONCE) {
+      await Promise.all(items.slice(i, i + READS_AT_ONCE).map(async (it, k) => {
+        const text = await this.text(it.path);
+        if (text !== null) out[i + k] = it.lines.map((n) => snippet(lineAt(text, n)));
+      }));
+    }
+    return out;
   }
 
   async read(path: string): Promise<string> { return this.fs.readText(path); }

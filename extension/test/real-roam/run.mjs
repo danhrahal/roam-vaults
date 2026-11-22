@@ -17,9 +17,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { genVault } from './genvault.mjs';
 import {
-  roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, shot, signIn, openGraph,
+  roam, log, sleep, evalIn, roamMB, serve, stopServing, launchRoam, killRoam, waitFor, shot, signIn, openGraph, secondRoam, closeSecondRoam,
   dismissDialogs, openPage, openSettings, clickLeaf, loadDevExtension, vaultRows, statusOf, clickButton, addVault,
-  clearExtensionState, scanMarked, touchAll, panelText,
+  clearExtensionState, scanMarked, touchAll, panelText, setSwitch,
 } from './roam.mjs';
 
 const EMAIL = process.env.ROAM_EMAIL, PASSWORD = process.env.ROAM_PASSWORD;
@@ -30,6 +30,8 @@ const DIST = path.resolve(process.env.DIST || path.join(import.meta.dirname, '..
 const OUT = path.resolve(process.env.OUT || 'real-roam-out');
 const NOTES = +(process.env.NOTES || 20000);
 const TEST_PAGE = 'Vaults CI test';
+// A page no note is, with a note whose name has two letters swapped: a similar-name (fuzzy) match.
+const FUZZY_PAGE = 'Vaults CI fuzzy check', FUZZY_NOTE = 'Vaults CI fuzzy chekc';
 const SMALL = 'CI Vault', BIG = 'Big Vault';
 // MB the extension adds over Roam without it. PR #16 measured 193 / 89 / 168 / 235 / 383 at 20,000
 // notes on Roam 0.0.42 (Linux); 0.1.0 measured 466 / 325 / 827 / 1,389 / 2,698.
@@ -90,6 +92,44 @@ function memRow(step, mb, limit) {
 }
 
 // ---------- the run ----------
+// ---------- counts under the page title ----------
+const countOf = (labels, kind) => +((labels ?? []).find((l) => l.includes(`${kind} Reference`))?.match(/^\d+/)?.[0] ?? 0);
+/** The counts line under the title: there, in order, and its numbers the ones Roam shows itself. */
+async function countsMatchRoam(title, vaultLabel = null) {
+  await openPage(title);
+  const sel = '.roam-article .rm-title-display-container + .rv-counts';
+  // give the unlinked count (an async query) a moment to land
+  await sleep(3000);
+  const line = await evalIn((sel) => { const l = document.querySelector(sel); return l ? [...l.querySelectorAll('strong')].map((e) => e.textContent) : null; }, sel);
+  check(`${title}: counts line under the title`, !!line, JSON.stringify(line));
+  if (vaultLabel) await shot('counts-under-title');
+  const kinds = (line ?? []).map((l) => (l.match(/(Linked|Unlinked|External Vault) References/) ?? [])[1]);
+  const order = ['Linked', 'Unlinked', 'External Vault'];
+  check(`${title}: counts read Linked, Unlinked, External`, kinds.every((k, i) => k && (i === 0 || order.indexOf(k) > order.indexOf(kinds[i - 1]))), JSON.stringify(kinds));
+  if (vaultLabel) check(`${title}: vault count matches the panel`, line?.includes(vaultLabel));
+  const roamLinked = await evalIn(() => +(document.querySelector('.roam-article .rm-reference-container > .flex-h-box strong')?.textContent.match(/^\s*(\d+)/)?.[1] ?? 0));
+  check(`${title}: linked count matches Roam's`, countOf(line, 'Linked') === roamLinked, `${countOf(line, 'Linked')} vs ${roamLinked}`);
+  // Roam counts unlinked references when the section is opened: open it and compare
+  // A real mouse click on its caret opens it (a script click on the header row does nothing)
+  const caret = roam.page.locator('.roam-article .rm-unlinked-reference-container > .flex-h-box .rm-caret').first();
+  await roam.page.locator('.roam-article .rm-unlinked-reference-container > .flex-h-box').first().hover().catch(() => {});
+  await caret.click({ force: true }).catch((e) => log('unlinked caret click failed:', e.message));
+  const roamUnlinked = await waitFor('Roam to count unlinked references', () => evalIn(() => {
+    const m = document.querySelector('.roam-article .rm-unlinked-reference-container > .flex-h-box strong')?.textContent.match(/^\s*(\d+)/);
+    return m ? { n: +m[1] } : false; // Roam writes "0 Unlinked References" when there are none; wrapped, as waitFor takes 0 for "not yet"
+  }), 15000).then((r) => r.n, () => null);
+  const unlinkedHtml = roamUnlinked === null ? await evalIn(() => document.querySelector('.roam-article .rm-unlinked-reference-container')?.outerHTML.slice(0, 400) ?? 'no unlinked section') : '';
+  if (unlinkedHtml) log('unlinked section:', unlinkedHtml);
+  check(`${title}: unlinked count matches Roam's`, roamUnlinked !== null && countOf(line, 'Unlinked') === roamUnlinked, `${countOf(line, 'Unlinked')} vs ${roamUnlinked}`);
+  if (roamUnlinked !== null) await caret.click({ force: true }).catch(() => {}); // fold it again
+  if (vaultLabel) {
+    await evalIn((sel) => [...document.querySelectorAll(`${sel} strong`)].find((e) => e.textContent.includes('External'))?.click(), sel);
+    await sleep(1500);
+    check(`${title}: clicking the vault count jumps to the panel`, await evalIn(() => { const r = document.querySelector('.roam-article .rv-panel')?.getBoundingClientRect(); return !!r && r.top >= 0 && r.top < innerHeight - 40; }));
+    await shot('counts-after-jump');
+  }
+}
+
 async function main() {
   if (!fs.existsSync(path.join(DIST, 'extension.js'))) throw new Error(`no build in ${DIST}: run npm run build first`);
   // vaults first, so writing them doesn't disturb the memory numbers
@@ -98,6 +138,7 @@ async function main() {
     [`${TEST_PAGE}.md`]: `# ${TEST_PAGE}\nThe note for this page. See [[CI linked note]].\n`,
     'Notes/CI linked note.md': `Mentions [[${TEST_PAGE}]] in a backlink line.\n`,
     'Daily/2026-01-02.md': `- met about [[${TEST_PAGE}|the CI page]]\n`,
+    [`Notes/${FUZZY_NOTE}.md`]: 'A note whose name has a typo.\n',
     '.obsidian/app.json': '{}',
   };
   for (const [rel, text] of Object.entries(smallFiles)) { fs.mkdirSync(path.dirname(path.join(small, rel)), { recursive: true }); fs.writeFileSync(path.join(small, rel), text); }
@@ -123,9 +164,9 @@ async function main() {
 
   // small vault: function
   await addVault(small);
-  await waitFor(`${SMALL} to finish scanning`, async () => /^3 notes$/.test(await statusOf(SMALL)), 30000)
+  await waitFor(`${SMALL} to finish scanning`, async () => /^4 notes$/.test(await statusOf(SMALL)), 30000)
     .catch(async (e) => { check('Small vault scans', false, await statusOf(SMALL)); throw e; });
-  check('Vault list shows the new vault and its note count', true, '3 notes');
+  check('Vault list shows the new vault and its note count', true, '4 notes');
   await shot('settings-one-vault');
   await openPage(TEST_PAGE);
   const t1 = await waitFor('External Vault References on the page', async () => { const t = await panelText(); return t.includes('External Vault References') && t; }, 15000).catch(() => '');
@@ -140,9 +181,41 @@ async function main() {
   const unfolded = await waitFor('the counterpart note to unfold', () => evalIn(() => document.querySelector('.roam-article .rv-preview')?.innerText.includes('The note for this page')), 5000).catch(() => false);
   check('Unfolding a note shows it inline', unfolded);
   await shot('page-external-vault-references');
+  // the counts line is off until the Reference counts switch is turned on
+  check('Reference counts switch turns off (an earlier run may have left it on)', (await setSwitch('Reference counts', false)) === false);
+  await openPage(TEST_PAGE);
+  await sleep(3000);
+  check('No counts line while Reference counts is off', await evalIn(() => !document.querySelector('.rv-counts')));
+  await shot('counts-off');
+  check('Reference counts switch turns on', (await setSwitch('Reference counts', true)) === true);
+  await countsMatchRoam(TEST_PAGE, '3 External Vault References');
+  // a page of the test graph with references of its own, when it has one
+  if (await evalIn((t) => !!window.roamAlphaAPI.q('[:find ?p . :in $ ?t :where [?p :node/title ?t]]', t), 'Kernel meeting protocol')) await countsMatchRoam('Kernel meeting protocol');
+  // settings sync through the graph, so leave the switch off for the next run
+  check('Reference counts switch turns off again', (await setSwitch('Reference counts', false)) === false);
+  await openPage(TEST_PAGE);
+  await sleep(2000);
+  check('Turning Reference counts off removes the line', await evalIn(() => !document.querySelector('.rv-counts')));
+  // similar names: only on a page no note is, faded, the swapped letters highlighted
+  await openPage(FUZZY_PAGE);
+  const fz = await waitFor('a similar-name match', () => evalIn(() => {
+    const row = document.querySelector('.roam-article .rv-panel .rv-fuzzy');
+    return row && { title: row.querySelector('.rv-note')?.textContent.trim(), marked: [...row.querySelectorAll('.rv-note .rm-highlight')].map((e) => e.textContent).join(',') };
+  }), 15000).catch(() => null);
+  check('A note with a similar name shows, faded, on a page no note is', fz?.title?.endsWith(FUZZY_NOTE), fz?.title ?? 'none');
+  check('The letters that differ are highlighted', fz?.marked === 'kc', fz?.marked ?? '');
+  await shot('page-similar-name');
+  await openPage(TEST_PAGE);
   fs.writeFileSync(path.join(small, 'Fresh CI note.md'), `Written while Roam was open, links [[${TEST_PAGE}]].\n`);
   const live = await waitFor('the new note to appear', async () => (await panelText()).includes('Fresh CI note'), 15000).then(() => true, () => false);
   check('A note added on disk shows up without a Rescan', live);
+  check('The vault index is stored in SQLite in the private file system', await evalIn(async () => {
+    try {
+      const d = await (await navigator.storage.getDirectory()).getDirectoryHandle('.roam-vaults');
+      for await (const [, h] of d.entries()) if (h.kind === 'directory') return true;
+    } catch { /* none */ }
+    return false;
+  }));
 
   // large vault: memory
   await addVault(big);
@@ -203,12 +276,44 @@ async function main() {
   const rows = await waitFor('both vault rows', async () => { const r = await vaultRows(); return r[BIG] && r[SMALL] && /notes?$/.test(r[SMALL].status) && r; }, 30000).catch(() => null);
   check('After a crash mid-scan the vault reads "Last scan didn\'t finish"', rows?.[BIG]?.status === "Last scan didn't finish", rows?.[BIG]?.status);
   check('…with its own Rescan button', rows?.[BIG]?.buttons.includes('Rescan'));
-  check('The other vault scans normally after the crash', rows?.[SMALL]?.status === '4 notes', rows?.[SMALL]?.status);
+  check('The other vault scans normally after the crash', rows?.[SMALL]?.status === '5 notes', rows?.[SMALL]?.status);
   await shot('after-crash-last-scan-didnt-finish');
   await clickButton('Rescan', BIG);
+  // The bar is Roam's own (Blueprint's): the extension only gives it a margin, so Roam's CSS has to draw it.
+  const barOf = (partWay) => evalIn(([name, partWay]) => {
+    const row = [...document.querySelectorAll('.rv-settings-row')].find((r) => r.querySelector('.rv-settings-name')?.firstChild?.textContent.trim() === name);
+    const bar = row?.querySelector('.bp3-progress-bar'), meter = bar?.firstElementChild;
+    if (!meter || (partWay && !/^[1-9]\d?%$/.test(meter.style.width))) return null;
+    return { height: bar.getBoundingClientRect().height, width: Math.round(bar.getBoundingClientRect().width), meter: meter.style.width, placed: getComputedStyle(meter).position };
+  }, [BIG, partWay]);
+  const bar = await waitFor('the progress bar part way', () => barOf(true), 60000, 50).catch(() => waitFor('the progress bar', () => barOf(false), 5000, 50).catch(() => null));
+  await shot('scan-progress-bar');
+  check("A scan shows Roam's progress bar in the vault's row, part way along", bar?.height === 8 && bar.width > 100 && bar.placed === 'absolute' && bar.meter !== '100%', JSON.stringify(bar));
   const recovered = await waitFor('the row Rescan to finish', async () => (await statusOf(BIG)) === `${gen.notes + extra.notes} notes`, 150000).then(() => true, () => false);
   check("The row's Rescan scans the vault and clears the mark", recovered && !(await scanMarked(BIG)), await statusOf(BIG));
   await shot('after-row-rescan');
+
+  // Roam open a second time on the same graph, as in a second tab: it shows the vaults from the
+  // first one's index. Last, so that it adds nothing to the memory measured above.
+  await dismissDialogs();
+  await openPage(TEST_PAGE);
+  await waitFor('External Vault References on the page', async () => (await panelText()).includes('backlink line'), 20000).catch(() => {});
+  const second = await secondRoam();
+  if (!second) log('second Roam: it did not load in a frame, so sharing a vault between two of them was not checked here');
+  else {
+    const text2 = () => second.evaluate(() => document.querySelector('.roam-article .rv-panel')?.innerText ?? '').catch(() => '');
+    const shows = await waitFor('the vault panel in the second Roam', async () => (await text2()).includes('backlink line'), 90000, 500).then(() => true, () => false);
+    check("Roam open a second time on the graph shows the vaults' notes", shows, (await text2()).split('\n')[0]);
+    const locks = await evalIn(async () => {
+      const l = await navigator.locks.query(), ours = (x) => x.name.startsWith('roam-vaults:');
+      return `${l.held.filter(ours).length} vaults open, ${l.pending.filter(ours).length} waited for`;
+    }).catch((e) => e.message);
+    check("…from the first one's index, without opening the vaults again", locks === '2 vaults open, 2 waited for', locks);
+    fs.writeFileSync(path.join(small, 'Two windows note.md'), `Written with Roam open twice, links [[${TEST_PAGE}]].\n`);
+    const both = await waitFor('the new note in both', async () => (await panelText()).includes('Two windows note') && (await text2()).includes('Two windows note'), 20000).then(() => true, () => false);
+    check('A note added on disk shows up in both', both);
+    await closeSecondRoam();
+  }
 }
 
 let stopped = '';

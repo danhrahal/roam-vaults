@@ -107,6 +107,26 @@ export async function killRoam(signal = 'SIGKILL', grace = 15000) {
   await sleep(1000);
   return signal !== 'SIGKILL' && left.length > 0;
 }
+/** Roam a second time on the same graph, in a frame of the first: what a second tab is to the
+ *  extension (its own page and workers, on the same storage). The desktop app's window can't be asked
+ *  for a second one from here. Returns the frame, or null if Roam doesn't load in one. */
+export async function secondRoam() {
+  await evalIn(() => {
+    const f = document.createElement('iframe');
+    f.id = 'rv-second-roam'; f.src = location.href;
+    f.style.cssText = 'position:fixed;left:0;top:0;width:1200px;height:760px;border:0;z-index:99999;background:#fff';
+    document.body.append(f);
+  });
+  const el = await roam.page.$('#rv-second-roam');
+  for (let i = 0; i < 180; i++) {
+    const frame = await el.contentFrame().catch(() => null);
+    if (frame && await frame.evaluate(() => !!(window.roamAlphaAPI?.data?.q && document.querySelector('.roam-article'))).catch(() => false)) return frame;
+    await sleep(500);
+  }
+  await closeSecondRoam();
+  return null;
+}
+export const closeSecondRoam = () => evalIn(() => document.querySelector('#rv-second-roam')?.remove());
 export async function waitFor(label, fn, timeout = 30000, every = 250) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeout) {
@@ -194,6 +214,31 @@ export async function openVaultsTab() {
   await openSettings();
   await waitFor('the "Vaults (dev)" settings tab', () => clickLeaf('Vaults (dev)'), 20000);
   await waitFor('the vault list', () => evalIn(() => !!document.querySelector('.rv-settings')), 10000);
+}
+/** Sets the switch named `name` in the Vaults settings tab to `on` with a real click, and returns
+ *  its state afterwards. */
+export async function setSwitch(name, on) {
+  await openVaultsTab();
+  const state = () => evalIn((name) => {
+    const leaf = [...document.querySelectorAll('.bp3-dialog *')].find((e) => e.children.length === 0 && e.textContent.trim() === name);
+    for (let el = leaf; el && !el.matches('.bp3-dialog'); el = el.parentElement) {
+      const input = el.querySelector('input[type=checkbox]');
+      if (input) { document.querySelectorAll('[data-ci-switch]').forEach((e) => e.removeAttribute('data-ci-switch')); input.setAttribute('data-ci-switch', ''); return input.checked; }
+    }
+    return null;
+  }, name);
+  const now = await waitFor(`the "${name}" switch`, async () => { const s = await state(); return s === null ? null : { s }; }, 10000);
+  if (now.s !== on) {
+    const input = roam.page.locator('[data-ci-switch]');
+    await input.scrollIntoViewIfNeeded().catch(() => {});
+    // Blueprint hides the input under its painted switch, so click the label that wraps it
+    const label = roam.page.locator('label:has([data-ci-switch])');
+    if (await label.count()) await label.first().click(); else await input.click({ force: true });
+    await waitFor(`the "${name}" switch to turn ${on ? 'on' : 'off'}`, async () => (await state()) === on, 5000).catch(() => {});
+  }
+  const after = await state();
+  await dismissDialogs();
+  return after;
 }
 /** Clicks the icon button `name` (cog, link, ...) in the Roam Depot section header that reads `label`. */
 async function clickHeaderIcon(label, name) {
@@ -288,6 +333,8 @@ export async function clearExtensionState() {
   await evalIn(async () => {
     for (const k of Object.keys(localStorage)) if (k.startsWith('roam-vaults')) localStorage.removeItem(k);
     for (const db of ['roam-vaults', 'roam-vaults-cache', 'roam-vaults-marks']) await new Promise((r) => { const q = indexedDB.deleteDatabase(db); q.onsuccess = q.onerror = q.onblocked = r; });
+    // the vaults' SQLite databases, if a run that stopped part way left any
+    await navigator.storage.getDirectory().then((d) => d.removeEntry('.roam-vaults', { recursive: true })).catch(() => {});
   });
 }
 /** Is the vault's scan mark set? It's in localStorage, or (since the crash-mark fix) in IndexedDB. */

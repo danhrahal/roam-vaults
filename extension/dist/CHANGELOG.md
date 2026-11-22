@@ -1,18 +1,38 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-22)
 
+- Notes with a similar name. When no note is the page, External Vault References also lists notes whose
+  name or alias is close to the page title: a typo, two swapped letters, a plural, or the same words in
+  another order. They come last, faded, with the letters that differ highlighted in Roam's highlight
+  colour. Every word must start with the same letter and keep its numbers, and titles under five letters
+  get none, so `Q3 Plan` never matches `Q4 Plan` and `Might` never matches `Eight`.
+- The vault index is kept in a database on disk (SQLite, in the Roam app's storage on this computer)
+  instead of in memory, so a large vault takes much less memory while Roam is open. A first scan takes
+  longer. The index is built again by the first scan after this update. Removing a vault deletes its
+  database.
+- **Reference counts**, a new switch in Settings → Roam Depot → Vaults, off until you turn it on. It adds
+  a line under the page title that shows how many Linked, Unlinked and External Vault References the page
+  has, in that order, so you can see what's further down without scrolling. Click a count to jump to that
+  section. Counts of zero are left out, and nothing shows while no vault is connected.
 - A page with thousands of vault notes to list (one named like a common tag, for example) no longer
   holds Roam up while they are all drawn. The first notes are drawn, and the rest as the page is scrolled.
 - Scanning a large vault uses much less memory at its peak, on Rescan most of all. The files are walked
   and read in a helper that exists only for the scan, so the file handles a scan makes are given back as
   it goes instead of piling up next to the index.
+- Pages show their vault notes sooner: the lines of linking notes are read for the notes that are drawn,
+  and for the rest as the page is scrolled, instead of for up to 200 notes at once.
+- A vault open in a second Roam window or tab is not read a second time. That window shows what the
+  first one has, follows its changes, and takes the vault over when the first one closes.
 - A first scan is faster: each note is looked up on disk once instead of twice.
 - After Roam starts, pages show their vault notes as soon as the saved index is loaded, instead of after
   every file in the vault has been checked. The check then runs in the background and settings show its
   progress.
 - Rescan, and the check at start, change the index in place instead of building a second one beside it,
   so pages keep their vault notes while it runs and it needs less memory.
+- While a vault is scanned, its row in settings shows a progress bar above the status. A vault that was
+  scanned before fills the bar by the notes counted. A first scan has no total to count towards, so its bar
+  is striped until the scan is done.
 
 ## 0.1.1 (2026-11-17)
 

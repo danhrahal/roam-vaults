@@ -80,6 +80,10 @@ downloaded by anyone who has it.
 
 ## Before you submit (checklist)
 
+This was the checklist for the first release, 0.1.0. Later releases follow **Releasing** in
+[`extension/DEVELOPING.md`](../extension/DEVELOPING.md): the README's pictures are retaken in real Roam by the
+Screenshots workflow, which also pins the image links.
+
 - [ ] Merge Phase 1 (PR #2) and this docs PR.
 - [ ] Create a `main` branch and make it the default branch. The repo currently has no `main`, and the
       marketplace links to `source_url`.

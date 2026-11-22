@@ -5,6 +5,7 @@
 import { VaultIndex, NONE, baseOf, fileKeyPath, aliasKeys, noteTagKeys, type Stamp } from '../core/vault-index.ts';
 import type { Note } from '../core/types.ts';
 import { LOOKUP_INDEXES } from './schema.ts';
+import { FuzzyTitles } from './fuzzy.ts';
 
 const ALIAS = 0, TAG = 1, MATCHER = 2;
 const WRITES_PER_COMMIT = 20000;
@@ -27,10 +28,18 @@ export class SqlIndex extends VaultIndex {
   private inTx = false;
   private writes = 0;
 
+  private fuzzyTitles: FuzzyTitles;
+
   constructor(db: any) {
     super(); this.db = db;
+    this.fuzzyTitles = new FuzzyTitles(db);
     // A scan into an empty database that never finished has left them out.
     this.bulk(false);
+  }
+
+  override fuzzy(title: string, limit: number) {
+    this.flush();
+    return this.fuzzyTitles.match(title, limit);
   }
 
   /**
@@ -40,12 +49,18 @@ export class SqlIndex extends VaultIndex {
   override bulk(on: boolean) {
     this.flush();
     this.db.exec(`PRAGMA cache_size = ${on ? -BULK_CACHE_KB : -CACHE_KB}`);
-    if (on) for (const [name] of LOOKUP_INDEXES) this.db.exec(`DROP INDEX IF EXISTS ${name}`);
-    else {
-      // Making an index sorts its rows. In memory that takes as much room as the index, from a
-      // WebAssembly heap that never gives room back: through temporary files (in the pool, for a
-      // database on disk) the sort holds no more than the page cache does.
-      const make = () => { for (const [name, cols] of LOOKUP_INDEXES) this.db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${cols}`); };
+    if (on) {
+      for (const [name] of LOOKUP_INDEXES) this.db.exec(`DROP INDEX IF EXISTS ${name}`);
+      this.fuzzyTitles.bulk(true);
+    } else {
+      // Making an index sorts its rows, and so does filling the similar-name tables. In memory that
+      // takes as much room as what is made, from a WebAssembly heap that never gives room back:
+      // through temporary files (in the pool, for a database on disk) a sort holds no more than
+      // the page cache does.
+      const make = () => {
+        for (const [name, cols] of LOOKUP_INDEXES) this.db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${cols}`);
+        this.fuzzyTitles.bulk(false);
+      };
       try { this.db.exec('PRAGMA temp_store = FILE'); make(); }
       catch { this.db.exec('PRAGMA temp_store = MEMORY'); make(); } // no room for a temporary file
       finally { this.db.exec('PRAGMA temp_store = MEMORY; PRAGMA shrink_memory'); }
@@ -93,6 +108,7 @@ export class SqlIndex extends VaultIndex {
   override flush() { if (this.inTx) { this.db.exec('COMMIT'); this.inTx = false; } }
   close() {
     this.flush();
+    this.fuzzyTitles.close();
     for (const s of this.stmts.values()) s.finalize();
     this.stmts.clear();
     this.db.close();
@@ -234,6 +250,7 @@ export class SqlIndex extends VaultIndex {
       SELECT value ->> 0, value ->> 1, value ->> 2, value ->> 3, value ->> 4, value ->> 5 FROM json_each(?)`, [JSON.stringify(rows)]);
     if (names.length) this.run('INSERT INTO link_names(note, name, links) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', [JSON.stringify(names)]);
     if (keys.length) this.run('INSERT OR IGNORE INTO note_keys(kind, key, note) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', [JSON.stringify(keys)]);
+    this.fuzzyTitles.putMany(notes.map((n) => ({ id: ids.get(n.path)!, path: n.path, aliases: n.aliases, isNew: !known.has(n.path) })));
     for (const n of notes) for (const fn of this.listeners) fn(n.path, known.has(n.path) ? 'update' : 'add');
   }
   /**
@@ -271,6 +288,7 @@ export class SqlIndex extends VaultIndex {
     // A link's name key can depend on the note's folder (./ and ../ links).
     this.run('DELETE FROM link_names WHERE note = ?', [id]);
     this.addLinkNames(id, note.links, to);
+    this.fuzzyTitles.putMany([{ id, path: to, aliases: note.aliases, isNew: false }]);
     for (const fn of this.listeners) fn(to, 'add');
     return true;
   }
@@ -287,7 +305,7 @@ export class SqlIndex extends VaultIndex {
     const isNote = this.one('SELECT 1 FROM notes WHERE id = ?', [id]) !== undefined;
     this.run('DELETE FROM link_names WHERE note = ?', [id]);
     this.run('DELETE FROM note_keys WHERE note = ?', [id]);
-    if (isNote) { this.run('DELETE FROM notes WHERE id = ?', [id]); if (this.count > 0) this.count--; }
+    if (isNote) { this.run('DELETE FROM notes WHERE id = ?', [id]); this.fuzzyTitles.remove(id); if (this.count > 0) this.count--; }
     this.run('DELETE FROM files WHERE id = ?', [id]);
     this.named.clear();
   }

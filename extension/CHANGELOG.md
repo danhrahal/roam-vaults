@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (unreleased)
 
+- Notes with a similar name. When no note is the page, External Vault References also lists notes whose
+  name or alias is close to the page title: a typo, two swapped letters, a plural, or the same words in
+  another order. They come last, faded, with the letters that differ highlighted in Roam's highlight
+  colour. Every word must start with the same letter and keep its numbers, and titles under five letters
+  get none, so `Q3 Plan` never matches `Q4 Plan` and `Might` never matches `Eight`.
 - The vault index is kept in a database on disk (SQLite, in the Roam app's storage on this computer)
   instead of in memory, so a large vault takes much less memory while Roam is open. A first scan takes
   longer. The index is built again by the first scan after this update. Removing a vault deletes its

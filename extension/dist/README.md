@@ -87,7 +87,7 @@ second.
 2. Open **Settings → Roam Depot → Vaults**.
 3. Click **Add vault folder**, choose your vault folder, and allow access when asked.
 
-![The Vaults settings tab, with two vaults and the Open notes with field](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/settings.png)
+![The Vaults settings tab, with two vaults, the Reference counts switch and the Open notes with field](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/settings.png)
 
 Matching notes then show up below Linked References, as **"External Vault References"**. The
 section appears only on pages that have matching vault notes. Other pages look exactly as before. The first

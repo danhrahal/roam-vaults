@@ -247,8 +247,9 @@ export class VaultIndex {
   keysMadeWith(_settings: string): boolean { return false; }
   /** Add or update several notes. */
   upsertNotes(notes: Note[]) { for (const n of notes) this.upsertNote(n); }
-  /** Every file by path, with a note's file size and time when it was read (null for an attachment). */
-  stamps(): Map<string, Stamp | null> {
+  /** Every file by path, with a note's file size and time when it was read (null for an attachment).
+   *  An index that takes a while over it may answer later, and do other work meanwhile. */
+  stamps(): Map<string, Stamp | null> | Promise<Map<string, Stamp | null>> {
     const out = new Map<string, Stamp | null>();
     for (const p of this.files.keys()) out.set(p, this.notes.get(p) ?? null);
     return out;

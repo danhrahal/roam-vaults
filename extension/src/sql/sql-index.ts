@@ -11,6 +11,14 @@ const WRITES_PER_COMMIT = 20000;
 /** Room for the database's pages in memory, in KB: day to day, and for a scan into an empty database. */
 export const CACHE_KB = 2048;
 const BULK_CACHE_KB = 16384;
+const STAMPS_AT_ONCE = 4000;
+/** Let the messages that are waiting (a page asking for its notes) be handled. A message to
+ *  ourselves, not a timer: timers are slowed to one a second while Roam's window is hidden. */
+const pause = () => new Promise<void>((done) => {
+  const c = new MessageChannel();
+  c.port1.onmessage = () => { c.port1.close(); done(); };
+  c.port2.postMessage(0);
+});
 
 export class SqlIndex extends VaultIndex {
   override readonly inPlace = true;
@@ -228,14 +236,21 @@ export class SqlIndex extends VaultIndex {
     if (keys.length) this.run('INSERT OR IGNORE INTO note_keys(kind, key, note) SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?)', [JSON.stringify(keys)]);
     for (const n of notes) for (const fn of this.listeners) fn(n.path, known.has(n.path) ? 'update' : 'add');
   }
-  /** Every file by path, a note with its file size and time: what a scan checks each file against. */
-  override stamps(): Map<string, Stamp | null> {
+  /**
+   * Every file by path, a note with its file size and time: what a scan checks each file against.
+   * Listed a few thousand files at a time, with a pause after each: all at once took half a second
+   * per 100,000 notes, and at a start the pages waiting for the vault waited that long too.
+   */
+  override async stamps(): Promise<Map<string, Stamp | null>> {
     const out = new Map<string, Stamp | null>();
-    const s = this.st('SELECT f.path, n.size, n.mtime FROM files f LEFT JOIN notes n ON n.id = f.id');
-    try {
-      while (s.step()) { const size = s.get(1); out.set(s.get(0), size === null ? null : { size, mtime: s.get(2) }); }
-    } finally { s.reset(true); }
-    return out;
+    for (let after = 0; ;) {
+      const rows = this.rows(`SELECT f.id, f.path, n.size, n.mtime FROM files f LEFT JOIN notes n ON n.id = f.id
+        WHERE f.id > ? ORDER BY f.id LIMIT ${STAMPS_AT_ONCE}`, [after]);
+      for (const [, path, size, mtime] of rows) out.set(path, size === null ? null : { size, mtime });
+      if (rows.length < STAMPS_AT_ONCE) return out;
+      after = rows[rows.length - 1][0];
+      await pause();
+    }
   }
   /** Has a full scan of the vault finished into this database? Until one has, it holds a part of the vault. */
   get scanned(): boolean { return this.one("SELECT v FROM meta WHERE k = 'scanned'")?.[0] === '1'; }

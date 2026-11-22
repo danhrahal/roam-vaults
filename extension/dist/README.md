@@ -111,10 +111,22 @@ Everything is in **Settings → Roam Depot → Vaults**:
 - **"Last scan didn't finish"** means Roam crashed while reading that vault. It isn't read again until
   you click **Rescan** in its row (see [Troubleshooting](#troubleshooting)).
 - **Rescan** reads every vault again, except one whose last scan didn't finish. Only changed files are parsed.
+- **Reference counts** turns on the line of counts under each page title (see below). It's off until you turn it on.
 
 ![A vault part way through a scan, with a progress bar in its row](https://raw.githubusercontent.com/sweenzor/roam-vaults/425512e095513fab6c68730771bec955afd28479/docs/images/scan-progress.png)
 
 Vaults adds no commands to the command palette.
+
+### Reference counts
+
+On a page with a lot of references, the vault notes are far down. Turn on **Reference counts** in
+**Settings → Roam Depot → Vaults** to see, under each page title, how many Linked, Unlinked and External Vault
+References the page has. Click a count to jump to that section.
+
+![The counts of Linked, Unlinked and External Vault References under a page title](https://raw.githubusercontent.com/sweenzor/roam-vaults/49ac8d0dc199e975fc3474fc95013113f6898dd4/docs/images/reference-counts.png)
+
+A count of zero is left out. Unlinked references are counted the way Roam counts them when you open that
+section: blocks that mention the page's title without linking to it.
 
 ### Large vaults
 

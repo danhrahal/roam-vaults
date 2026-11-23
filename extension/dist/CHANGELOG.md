@@ -15,6 +15,11 @@
 - A click on a line's text no longer opens the note: the bullet and the note title do, as a bullet and a
   page title do in Roam. The section folds from its caret.
 - Note titles show their folders in grey before the note's name.
+- A paragraph wrapped over several lines in the file is one block, not one block per line.
+- Obsidian's `%%comments%%` and block ids (`^a1b2c3`) are hidden, as in Obsidian's reading view. Tasks
+  with a custom status (`[/]`, `[-]`, `[?]`, `[!]`) are drawn as ticked boxes, as Obsidian draws them.
+- Frontmatter `tags` written as one string with commas or spaces (`tags: a, b`) no longer make tags.
+  Obsidian reads tags from a list (`tags: [a, b]`), and Vaults now does the same.
 
 ## 0.2.0 (2026-11-22)
 

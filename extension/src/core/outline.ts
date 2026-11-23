@@ -102,7 +102,33 @@ function ownerOf(r: Row[], n: number): number {
     if (p.indent === 0 && p.kind === 'text') break; // a paragraph at the margin: no list above
     least = Math.min(least, p.indent);
   }
-  return n;
+  // a line of a paragraph: the paragraph starts where its run of text lines does
+  let start = n;
+  if (row.kind === 'text') while (start > 0 && r[start - 1].kind === 'text') start--;
+  return start;
+}
+
+/** One past the last line of the paragraph that starts on line n. */
+function paraEnd(r: Row[], n: number): number {
+  let end = n + 1;
+  while (end < r.length && r[end].kind === 'text') end++;
+  return end;
+}
+
+/** A paragraph's lines as one block. Lines wrapped in the file are one line of text, as Markdown
+ *  reads them; a line that ends in two spaces or a backslash, a table and a quote keep their lines. */
+function paraText(part: Row[]): string {
+  if (part.length === 1) return part[0].text;
+  if (part.some((p) => /^[|>]/.test(p.text))) {
+    const base = Math.min(...part.map((p) => p.indent));
+    return part.map((p) => ' '.repeat(p.indent - base) + p.text).join('\n');
+  }
+  let out = '';
+  part.forEach((p, k) => {
+    const hard = /( {2,}|\\)$/.test(p.text);
+    out += p.text.replace(/( {2,}|\\)$/, '').trimEnd() + (k === part.length - 1 ? '' : hard ? '\n' : ' ');
+  });
+  return out;
 }
 
 /** The lines after a list item's first that are still its own text: one past the last. */
@@ -120,6 +146,7 @@ function ownEnd(r: Row[], n: number): number {
 
 function blockText(r: Row[], n: number): string {
   const row = r[n];
+  if (row.kind === 'text') return clip(paraText(r.slice(n, paraEnd(r, n))));
   if (row.kind !== 'item') return clip(row.text);
   const end = ownEnd(r, n);
   if (end === n + 1) return clip(row.text);
@@ -131,7 +158,14 @@ function blockText(r: Row[], n: number): string {
 
 function context(r: Row[], n: number): LineContext {
   if (!r.length) return { text: '', line: 0, kids: [], up: [] };
-  const at = ownerOf(r, n);
+  let at = ownerOf(r, n);
+  // a paragraph too long to show whole: the line itself, so that what was asked for is in the text
+  let alone = false;
+  if (at !== n && r[at].kind === 'text') {
+    let chars = 0;
+    for (let i = at, end = paraEnd(r, at); i < end && chars <= MAX_BLOCK; i++) chars += r[i].text.length + 1;
+    if (chars > MAX_BLOCK) { at = n; alone = true; }
+  }
   const row = r[at];
   const up: { text: string; line: number }[] = [];
   if (row.kind === 'item') {
@@ -152,7 +186,7 @@ function context(r: Row[], n: number): LineContext {
     if (p.kind === 'heading' && p.level < level) { heads.unshift({ text: p.text, line: i }); level = p.level; }
   }
   const budget = { n: MAX_KIDS };
-  const b: LineContext = { text: blockText(r, at), line: at, kids: [], up: [...heads, ...up] };
+  const b: LineContext = { text: alone ? clip(row.text) : blockText(r, at), line: at, kids: [], up: [...heads, ...up] };
   if (row.kind === 'item') kidsOf(r, at, b, budget);
   return b;
 }
@@ -237,7 +271,8 @@ export function outlineOf(text: string): OutlineBlock[] {
     while (end < r.length && r[end].kind === row.kind) end++;
     const part = r.slice(i, end), base = Math.min(...part.map((p) => p.indent));
     if (row.indent === 0) items = [];
-    (row.indent > 0 && items.length ? items[items.length - 1].b : under()).kids.push({ text: clip(part.map((p) => ' '.repeat(p.indent - base) + p.text).join('\n')), line: i, kids: [] });
+    const body = row.kind === 'text' ? paraText(part) : part.map((p) => ' '.repeat(p.indent - base) + p.text).join('\n');
+    (row.indent > 0 && items.length ? items[items.length - 1].b : under()).kids.push({ text: clip(body), line: i, kids: [] });
     i = end;
   }
   return root.kids;

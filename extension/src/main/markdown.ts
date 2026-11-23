@@ -53,16 +53,20 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: stri
 };
 
 /** Where an inline thing can start. What starts there is tried in order; what fits nothing is text. */
-const START = /!?\[|`|\*\*|__|\^\^|==|~~|\*|#|\{\{|https?:\/\//g;
+const START = /!?\[|`|%%|\*\*|__|\^\^|==|~~|\*|#|\{\{|https?:\/\//g;
 const RE_TAG = /^#([\p{L}\p{N}_/-]*[\p{L}_/-][\p{L}\p{N}_/-]*)/u;
 const RE_URL = /^https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]}'"]/;
 const RE_TODO = /^\{\{(?:\[\[)?(TODO|DONE)(?:\]\])?\}\}/;
 const RE_ATTR = /^([^:`[\]{}()#\n][^:`{}\n]{0,80}?)::(?=\s|$)/;
-const RE_TASK = /^\[( |x|X)\]\s+/;
+// Obsidian draws a box for any status and ticks every one but the empty one: [x], [/], [-], [?], [!], ...
+const RE_TASK = /^\[([ xX/\-?!><*])\]\s+/;
+// a block's id, which Obsidian hides: "text ^a1b2c3", or a line that is only the id
+const RE_BLOCK_ID = /(?:^|[ \t])\^[A-Za-z0-9-]+[ \t]*$/;
 
 /** Render one line of inline syntax into parent (used for panel lines and breadcrumbs too). */
 export function inline(parent: HTMLElement, s: string) {
   let at = 0;
+  s = s.replace(RE_BLOCK_ID, '');
   // what only the start of a block can be: a task box, an attribute's name
   let m = RE_TASK.exec(s);
   if (m) { parent.append(checkbox(m[1] !== ' '), ' '); at = m[0].length; }
@@ -91,6 +95,11 @@ function spans(parent: HTMLElement, s: string, from = 0) {
  *  puts the plain text before it in first. */
 function thing(parent: HTMLElement, s: string, i: number, tok: string, flush: () => void): number {
   const put = (end: number, ...nodes: (Node | string)[]) => { flush(); parent.append(...nodes); return end; };
+  if (tok === '%%') {
+    // an Obsidian comment, hidden as in its reading view; one left open hides the rest
+    const c = s.indexOf('%%', i + 2);
+    return put(c < 0 ? s.length : c + 2);
+  }
   const embed = tok[0] === '!';
   const o = embed ? i + 1 : i;
   if (tok.endsWith('[')) {

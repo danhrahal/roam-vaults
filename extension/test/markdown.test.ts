@@ -83,3 +83,14 @@ test('web links open in the browser; what Roam would run or fetch stays text', (
   assert.deepEqual(parts('{{query: {and: [[A]]}}} ((abcdefghi)) {{iframe: https://example.com}}').filter((p) => p.startsWith('<')), [ref('A'), '<a:https://example.com>']);
   assert.deepEqual(parts('[[unclosed and [half](open'), ['[[unclosed and [half](open']);
 });
+
+test('what Obsidian hides or ticks is hidden or ticked: comments, block ids, any task status', () => {
+  assert.deepEqual(body('before %%a private remark%% after'), [0, 'before ', ' after']);
+  assert.deepEqual(body('open %%hides the rest'), [0, 'open ']);
+  assert.deepEqual(body('Fed at 7 and 19 ^a1b2c3'), [0, 'Fed at 7 and 19']);
+  assert.deepEqual(body('^a1b2c3'), [0]);
+  assert.deepEqual(body('^^kept^^'), [0, 'span.rm-highlight:kept']);
+  for (const s of ['x', '/', '-', '?', '!']) assert.equal(String(body(`[${s}] order flour`)[1]).startsWith('span.rm-checkbox rm-done'), true, s);
+  assert.equal(String(body('[ ] order flour')[1]).startsWith('span.rm-checkbox rm-todo'), true);
+  assert.deepEqual(body('[1] Smith 2020'), [0, '[1] Smith 2020']);
+});

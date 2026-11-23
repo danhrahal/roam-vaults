@@ -98,11 +98,26 @@ test('a whole note becomes an outline: properties, headings with what follows th
     'aliases:: [Levain]',
     ['tags::', ['bread', 'starter']],
     ['# Sourdough', [
-      'A wild yeast bread.\nSecond line of the paragraph.',
+      'A wild yeast bread. Second line of the paragraph.',
       ['## Method', [['Mix', [['flour and [[Water]]', ['75% hydration']]]], 'Fold', '```\n- not a block\n```', '> a quote\n> of two lines']],
       ['## Notes', ['last words']],
     ]],
   ]);
   assert.deepEqual(outlineOf(day).map(tree)[0], contextOf(day, [0]).map(tree)[0]);
   assert.deepEqual(outlineOf(''), []);
+});
+
+test('a paragraph wrapped over several lines is one block, whichever line is asked for', () => {
+  const md = 'Intro line\n\nThe starter is fed\nwith [[Rye]] flour  \nand kept at 26°.\n\n| a | b |\n| - | - |\n| [[Rye]] | 2 |\n';
+  const [c] = contextOf(md, [3]);
+  assert.equal(c.text, 'The starter is fed with [[Rye]] flour\nand kept at 26°.');
+  assert.equal(c.line, 2);
+  assert.equal(contextOf(md, [8])[0].text, '| a | b |\n| - | - |\n| [[Rye]] | 2 |');
+});
+
+test('a line of a paragraph too long to show is shown alone', () => {
+  const md = 'y'.repeat(5000) + '\n[[Rye]] at the end';
+  const [c] = contextOf(md, [1]);
+  assert.equal(c.text, '[[Rye]] at the end');
+  assert.equal(c.line, 1);
 });

@@ -144,3 +144,11 @@ test('matcher tiers', () => {
   assert.equal(m.associations('Project Alpha').tagged.length, 1);
   assert.equal(m.associations('Café'.normalize('NFD')).notes[0].path, 'café.md');
 });
+
+test('frontmatter tags: a list gives its tags, a string one tag when it can be one, as Obsidian reads them', async () => {
+  const { extractFmTags } = await import('../src/core/frontmatter.ts');
+  assert.deepEqual(extractFmTags({ tags: ['bake', '#starter'] }), ['bake', 'starter']);
+  assert.deepEqual(extractFmTags({ tags: 'bake' }), ['bake']);
+  assert.deepEqual(extractFmTags({ tags: 'bake, pastry' }), []);
+  assert.deepEqual(extractFmTags({ tag: 'bake pastry' }), []);
+});

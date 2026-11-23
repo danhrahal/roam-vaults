@@ -31,21 +31,21 @@ Roam has none, leave it out rather than invent UI.
 | Wikilink | Opens the note in the same tab | Page reference | Roam's element; click opens the page, shift-click the sidebar | None |
 | Link with text `[[A\|b]]`, `[b](A.md)` | Shows `b` | Alias `[b]([[A]])` | Roam's alias element | None |
 | Heading link `[[A#H]]` | Shows "A > H", scrolls to the heading | Reference to the heading block | The heading is dropped; opens at the top | Keep the heading; open the note at that block |
-| Block id `^id`, `[[A#^id]]` | The id is hidden; the link opens and flashes the block | Block reference `((uid))` | `^id` shows as text; the link shows `A#^id` | Draw as a Roam block reference with the block's text |
+| Block id `^id`, `[[A#^id]]` | The id is hidden; the link opens and flashes the block | Block reference `((uid))` | `^id` is hidden; the link shows `A#^id` | Draw as a Roam block reference with the block's text |
 | Embed `![[A]]`, `![[A#H]]`, `![[A#^id]]` | The note, section or block drawn in place | `{{embed}}` | A paper-clip link | Draw in place, lazily, with a depth limit |
 | Image and PDF embed | Image with a width; PDF viewer | Inline image; `{{pdf}}` | Not shown | Show local images inline, read from the folder (decided 2026-11-22) |
 | Tag, nested `#a/b` | Tag pane; a parent tag counts its children | A tag is a page; `a/b` is a namespace | The tag's page lists tagged notes, parents too | None |
-| Frontmatter `tags` | The list form only. A comma string makes no tags in 1.15.1 | Tags in a block | Comma and space strings are split into tags | Follow current Obsidian and stop splitting strings (decided 2026-11-22) |
+| Frontmatter `tags` | The list form only. A comma string makes no tags in 1.15.1 | Tags in a block | The list form, or one tag as a string | None |
 | Properties | Typed widgets; links are clickable | Attributes `Name:: value`; the attribute's page lists every use | `key:: value` blocks with a clickable key | Values are raw YAML; no list of notes per property |
 | Links in properties | Count as backlinks | References inside an attribute | Counted as backlinks | The reference block for a frontmatter line needs a test |
 | List item | Indented items | Blocks | Roam blocks, nested, with caret and children | None |
 | Numbered list | Numbers | A parent block viewed as numbered | Bullets | Numbers are lost |
-| Heading, paragraph | Sections that fold | Heading blocks, levels 1 to 3 | A heading owns what follows; a paragraph is a block | A hard-wrapped paragraph is one block per line |
-| Task | Checkbox; any status letter draws checked | `{{[[TODO]]}}`, `{{[[DONE]]}}` | `[ ]` and `[x]` only | `[/]`, `[-]`, `[?]`, `[!]` show as text |
+| Heading, paragraph | Sections that fold | Heading blocks, levels 1 to 3 | A heading owns what follows; a paragraph is a block, wrapped lines joined | None |
+| Task | Checkbox; any status letter draws checked | `{{[[TODO]]}}`, `{{[[DONE]]}}` | Any status is a ticked box | None |
 | Callout | Coloured box with an icon; can fold | Blockquote | Blockquote | The kind is lost when there is a title; fold is ignored |
 | Quote | Blockquote | Blockquote | Blockquote | None |
 | Highlight `==x==` | Highlight | `^^x^^` | Roam's highlight | None |
-| Comment `%%x%%` | Hidden when reading | None | Shown as text | Should be hidden |
+| Comment `%%x%%` | Hidden when reading | None | Hidden | None |
 | Table | Table | `{{table}}` | One block of raw pipes | Unreadable when wide |
 | Code | Highlighted | Code block | Plain `pre` | No highlighting |
 | Mermaid, math | Drawn, typeset | `{{mermaid}}`, `$$` | Code; raw TeX | Needs Roam's own renderers |
@@ -85,8 +85,8 @@ Obsidian keeps them in the file name and in wikilinks.
 | Path fields (`superseded_by`, `sources[].resource`) | Relations between notes | References in attributes | Not read as links | Count them as backlinks, drawn as the attribute block |
 | `type`, `status` | Controlled words | Page references in an attribute | Raw text | Draw as page references, so a type's page lists its notes |
 | Markdown links | Resolved from the file's folder, then the bundle root; case-sensitive | Page reference | Root first; reference-style links are not read | Follow the spec's order; read reference-style links |
-| `tags` | A list | Tags | A scalar string is split | Same as Obsidian |
-| Body text | Hard-wrapped paragraphs, GFM tables, footnotes | Blocks | One block per line; raw pipes | Join wrapped lines; draw tables |
+| `tags` | A list | Tags | The list form, or one tag as a string | None |
+| Body text | Hard-wrapped paragraphs, GFM tables, footnotes | Blocks | Wrapped lines joined; raw pipes | Draw tables |
 | Bundle | A folder of OKF files | A vault | Any folder is a vault | Detect a bundle and switch to OKF's rules |
 | Anchor `file.md#section` | A link to a section | Reference to the heading block | Dropped | Same as Obsidian heading links |
 
@@ -110,16 +110,14 @@ What the extension copies from Roam, measured in Linked References:
 
 ## What is left, in rough order
 
-1. Small fidelity fixes: hide `%%comments%%`, custom task statuses, join hard-wrapped paragraphs,
-   hide a trailing `^id`, stop splitting comma strings in `tags`.
-2. OKF names and structure: `title`, `index.md`, `log.md`, link order per the spec.
-3. Heading and block links as Roam block references.
-4. Embeds drawn in place.
-5. Properties as attributes: typed values, OKF path fields as backlinks, a page per property key.
-6. A note in the main window and the sidebar, in place of the dialog.
-7. Tables and numbered lists.
-8. Linked References' search and filter on the vault section, and its right-click menus.
-9. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
+1. OKF names and structure: `title`, `index.md`, `log.md`, link order per the spec.
+2. Heading and block links as Roam block references.
+3. Embeds drawn in place.
+4. Properties as attributes: typed values, OKF path fields as backlinks, a page per property key.
+5. A note in the main window and the sidebar, in place of the dialog.
+6. Tables and numbered lists.
+7. Linked References' search and filter on the vault section, and its right-click menus.
+8. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
 
 ## What cannot be mapped
 

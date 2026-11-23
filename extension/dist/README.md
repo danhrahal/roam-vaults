@@ -28,16 +28,19 @@ syntax Vaults understands. You don't need Obsidian installed: any folder of Mark
 That includes **Open Knowledge Format (OKF)** bundles. [OKF](https://github.com/open-knowledge-format/open-knowledge-format)
 is an open format for knowledge kept as plain Markdown files with YAML frontmatter
 ([spec](https://github.com/open-knowledge-format/open-knowledge-format/blob/main/SPEC.md)). Vaults reads a
-bundle the way OKF means it:
+bundle the way OKF means it. A folder is a bundle when its `index.md` has `okf_version` in its
+frontmatter, as the spec asks bundles to have:
 
 - A note is found by its `title` as well as its file name, so the page **Country Sourdough Loaf** shows
-  `products/country-sourdough.md`.
+  `products/country-sourdough.md`. In a bundle the title is also the note's name, wherever the note is shown.
+- `type` and `status` are page references, so the page **Metric** lists every note with `type: Metric`.
 - A folder's `index.md` is the note for the page named like the folder: **Products** shows
   `products/index.md`.
 - Each day of a `log.md` (`## 2026-11-21`) is a reference on that day's daily page, with the day's entries
   under it.
 - Standard Markdown links are followed, including bundle-absolute ones like
-  `[Customers](/tables/customers.md)`, as well as `[[wikilinks]]`.
+  `[Customers](/tables/customers.md)`, as well as `[[wikilinks]]`. In a bundle a link is read from the
+  note's own folder first, and one that starts with `/` from the bundle's folder.
 
 </details>
 
@@ -86,7 +89,9 @@ is drawn as in Linked References, and works the same way:
   the folder on your device.
 - Tables are drawn as Roam's tables, and numbered lists keep their numbers.
 - Properties read as Roam attributes. A date in a property (`created: 2026-11-09`) links to that day, so
-  the day's page in Roam lists the note. A link or a path to a note in a property counts as a link too.
+  the day's page in Roam lists the note. A link or a path to a note in a property counts as a link too. A
+  property's name is a page too, as an attribute's is in Roam: the page **author** lists the notes with an
+  `author` property.
 
 ![A line from a nested list, with its path above it and the items under it opened](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/nested-line.png)
 

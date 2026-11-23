@@ -6,7 +6,7 @@
 
 import {
   type Link, type ParsedNote, type ParseOptions, type Heading,
-  F_TRIMMED, F_ESCAPED_PIPE, F_RELATIVE, F_ABSOLUTE, F_DECODE_FAIL, F_UNQUOTED_YAML, F_HAS_MD_EXT, F_EMPTY_ALIAS, F_ANGLE,
+  F_TRIMMED, F_ESCAPED_PIPE, F_RELATIVE, F_ABSOLUTE, F_DECODE_FAIL, F_UNQUOTED_YAML, F_HAS_MD_EXT, F_EMPTY_ALIAS, F_ANGLE, F_OKF,
 } from './types.ts';
 import { RE_NOTE_PATH } from './outline.ts';
 const RE_ISO_DAY = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
@@ -204,6 +204,12 @@ function parseMdDest(dest: string): { target: string; subpath: string; flags: nu
   return { target: intern(path.normalize('NFC')), subpath: subpath && intern(subpath), flags };
 }
 
+/** Frontmatter keys that are not attributes in Roam: tags and aliases, and Obsidian's styling. */
+const RE_NOT_ATTR = /^(tags?|alias(es)?|cssclass(es)?)$/i;
+/** "Name:: value" at the start of a line, after a list marker if any (Roam's attribute, as its
+ *  Markdown export writes it). Same name rule as the renderer's. */
+const RE_BODY_ATTR = /^([ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?)([^:`[\]{}()#\n][^:`{}\n]{0,80}?)::(?=[ \t]|$)/gm;
+
 /** A note's `title` property names it, as an alias does: in OKF it is the note's name, and the
  *  file name is only a slug of it ("country-sourdough.md", title "Country Sourdough Loaf"). */
 function withTitle(aliases: string[], props: Record<string, string | string[]> | null, path: string): string[] {
@@ -233,6 +239,12 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
       const km = /^("[^"]*"|'[^']*'|[^\s:#-][^:]*?)\s*:/.exec(l);
       if (km) curKey = km[1].replace(/^["']|["']$/g, '');
       const lineNo = li + 1; // line 0 is '---'
+      // A property's name is a page, as an attribute's is in Roam: that page lists the notes that
+      // have it. Tags and aliases are Roam's tags and aliases instead.
+      if (km && curKey && !RE_NOT_ATTR.test(curKey)) {
+        links.push({ kind: 'prop', embed: false, target: intern(curKey.trim().normalize('NFC')), subpath: '', display: null, line: lineNo, col: 0, flags: 0, prop: intern(curKey),
+          ...(opts.snippets ? { snippet: detach(l.trim().slice(0, 100)) } : {}) });
+      }
       RE_WIKI.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = RE_WIKI.exec(l))) {
@@ -255,6 +267,8 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
         const prop = { kind: 'prop' as const, embed: false, display: null, line: lineNo, col: 0, prop: intern(curKey), ...(opts.snippets ? { snippet: detach(l.trim().slice(0, 100)) } : {}) };
         if (RE_ISO_DAY.test(v)) links.push({ ...prop, target: intern(v), subpath: '', flags: 0 });
         else if (RE_NOTE_PATH.test(v)) { const d = parseMdDest(v); if (d) links.push({ ...prop, target: d.target, subpath: d.subpath, flags: d.flags }); }
+        // OKF's type and status are controlled words: in a bundle, each is a page listing its notes.
+        else if (v && /^(type|status)$/.test(curKey) && !/[[\]]/.test(v)) links.push({ ...prop, target: intern(v.normalize('NFC')), subpath: '', flags: F_OKF });
       }
     }
   }
@@ -269,6 +283,12 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
   };
 
   let m: RegExpExecArray | null;
+  // An attribute written in the body, as a Roam export writes one ("Name:: value"): its name is a page.
+  RE_BODY_ATTR.lastIndex = fm.bodyStart;
+  while ((m = RE_BODY_ATTR.exec(masked))) {
+    const name = m[2].trim();
+    if (name) push({ kind: 'wiki', embed: false, target: intern(name.normalize('NFC')), subpath: '', display: null, line: 0, col: 0, flags: 0 }, m.index + m[1].length);
+  }
   RE_WIKI.lastIndex = fm.bodyStart;
   while ((m = RE_WIKI.exec(masked))) {
     if (m[2].trim() === '') continue;

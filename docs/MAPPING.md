@@ -35,7 +35,7 @@ Roam has none, leave it out rather than invent UI.
 | Image and PDF embed | Image with a width; PDF viewer | Inline image; `{{pdf}}` | Images show inline, read from the folder, with Obsidian's width. A PDF is a link | PDFs are not shown |
 | Tag, nested `#a/b` | Tag pane; a parent tag counts its children | A tag is a page; `a/b` is a namespace | The tag's page lists tagged notes, parents too | None |
 | Frontmatter `tags` | The list form only. A comma string makes no tags in 1.15.1 | Tags in a block | The list form, or one tag as a string | None |
-| Properties | Typed widgets; links are clickable | Attributes `Name:: value`; the attribute's page lists every use | `key:: value` blocks as Roam would hold them: no quotes, tags as tags, a date as a link to that day, a list on one line as its values | No list of notes per property |
+| Properties | Typed widgets; links are clickable | Attributes `Name:: value`; the attribute's page lists every use | `key:: value` blocks as Roam would hold them: no quotes, tags as tags, a date as a link to that day, a list on one line as its values. A property's name is a page that lists the notes with it, and so is a `Name::` in the body | None |
 | Links in properties | Count as backlinks | References inside an attribute | Counted as backlinks, drawn as the attribute block | None |
 | List item | Indented items | Blocks | Roam blocks, nested, with caret and children | None |
 | Numbered list | Numbers | A parent block viewed as numbered | Numbers in place of bullets, as Roam draws them | None |
@@ -78,15 +78,15 @@ Obsidian keeps them in the file name and in wikilinks.
 
 | OKF | What the spec says | Roam equivalent | Today | Gap |
 | --- | --- | --- | --- | --- |
-| `title` | The note's name | Page title | Matched like an alias | Show it as the note's name |
+| `title` | The note's name | Page title | In a bundle, the note's name wherever it is shown; matched like an alias | None |
 | `index.md` | Describes its folder | The page for that folder | The note for the page named like its folder | None |
 | `log.md` | Dated entries under `## YYYY-MM-DD` | Blocks on daily pages | Each day is a reference on that day's daily page, entries under it | None |
 | Path fields (`superseded_by`, `sources[].resource`) | Relations between notes | References in attributes | A path to a note in any property is a link to it, drawn as the attribute block | None |
-| `type`, `status` | Controlled words | Page references in an attribute | Raw text | Draw as page references, so a type's page lists its notes |
-| Markdown links | Resolved from the file's folder, then the bundle root; case-sensitive | Page reference | Root first; reference-style links are not read | Follow the spec's order; read reference-style links |
+| `type`, `status` | Controlled words | Page references in an attribute | In a bundle, page references: a type's page lists its notes | None |
+| Markdown links | Resolved from the file's folder; `/` from the bundle root; case-sensitive | Page reference | In a bundle, the spec's order, then as in a vault; not case-sensitive | Reference-style links are not read |
 | `tags` | A list | Tags | The list form, or one tag as a string | None |
 | Body text | Hard-wrapped paragraphs, GFM tables, footnotes | Blocks | Wrapped lines joined; tables are Roam's table | Footnotes are raw |
-| Bundle | A folder of OKF files | A vault | Any folder is a vault | Detect a bundle and switch to OKF's rules |
+| Bundle | A folder of OKF files; its root `index.md` has frontmatter | A vault | A folder whose `index.md` has `okf_version` is a bundle | A root `index.md` without `okf_version` is not seen |
 | Anchor `file.md#section` | A link to a section | Reference to the heading block | A click opens the note with the heading marked | None |
 
 ## Roam's side
@@ -114,10 +114,9 @@ What the extension copies from Roam, measured in Linked References:
 
 ## What is left, in rough order
 
-1. OKF: detect a bundle, show `title` as the note's name, link order per the spec, `type` and `status` as page references.
-2. A page per property key, listing the notes that have it.
-3. Linked References' search and filter on the vault section, and its right-click menus.
-4. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
+1. Linked References' search and filter on the vault section, and its right-click menus.
+2. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
+3. Reference-style Markdown links (`[text][ref]` with `[ref]: target.md`).
 
 ## What cannot be mapped
 

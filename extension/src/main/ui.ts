@@ -44,12 +44,18 @@ const STYLES = `
 .rv-tl-file:hover,.rv-tl-dir:hover{background:rgba(138,155,168,.14)}
 .rv-tl-dir .rm-caret{width:14px;flex:none;margin:0}
 .rv-tl-file{padding-left:14px}
-.rv-tl-ic{width:34px;flex:none;display:flex;justify-content:center;align-items:center;color:#a9acb9}
+.rv-tl-ic{width:42px;flex:none;display:flex;justify-content:center;align-items:center;color:#a9acb9}
 .rv-tl-ext{font-size:10px;font-weight:700;border-radius:3px;padding:0 4px;letter-spacing:.03em;border:1px solid #c7cede;color:#5a6a8c;line-height:1.5}
 .rv-tl-ext.rv-tl-pdf{border-color:#e3b5b1;color:#b3362f}
-.rv-tl-preview{margin:2px 0 8px 54px}
+.rv-tl-preview{margin:2px 0 8px 62px}
 .rv-tl-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rv-tl-dir .rv-tl-name{font-weight:500}
+.rv-tl-loc{display:flex;align-items:center;gap:5px;margin-left:8px;min-width:0;font-size:12.5px;color:#a0aebb;white-space:nowrap;overflow:hidden}
+.rv-tl-trail{overflow:hidden;text-overflow:ellipsis}
+.rv-tl-hub.rv-tl-sm{font-size:9.5px;padding:0 4px;flex:none}
+.rv-tl-snip{margin:0 0 8px 62px;border-left:2px solid rgba(138,155,168,.35);padding-left:8px;font-size:13.5px;max-width:780px}
+.rv-tl-snip .rm-reference-item{background:none!important;padding:0!important;margin:0!important;box-shadow:none!important}
+.rv-tl-snip .rm-zoom{display:none}
 .rv-code{margin:0;white-space:pre-wrap}
 .rv-panel .rm-block-main:hover>.controls .rv-kids-caret{opacity:.7}
 .rv-checkbox{pointer-events:none}
@@ -452,20 +458,6 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
     const tag = tagOnce(v, c.path);
     rows.push(() => group(v, 'page', c.path, c.title, false, tag, preview(v, c.path)));
   }
-  for (const { v, r } of list) for (const b of r.backlinks) {
-    const tag = tagOnce(v, b.path);
-    if (b.unread) unread.set(rows.length, { v, b });
-    rows.push(() => group(v, 'links', b.path, b.title, true, tag, () => {
-      const box = h('div', {});
-      // Two links in one block are one reference, as in Roam.
-      const draw = () => box.replaceChildren(...b.lines.filter((l, i) => !b.lines.slice(0, i).some((x) => (x.at ?? x.line) === (l.at ?? l.line)))
-        .map((l) => referenceEl({ text: l.text, line: l.at ?? l.line, up: l.up ?? [], kids: l.kids ?? [], cut: l.cut }, b.path, v.act, find || undefined, filtering)));
-      draw();
-      // Its lines are read before it is drawn (see `ahead`); if that failed, they are filled in here.
-      if (b.unread) v.act.lines([b]).then(draw, () => {});
-      return box;
-    }));
-  }
   // RahalOS: the files inside a folder named like the page, as a timeline. One line says where the
   // folder is (Hub, Area, folder) with a button that opens it in the Finder; then subfolders and
   // undated files, then the dated files by day, newest first, by their name without the date. A note
@@ -498,7 +490,7 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
   const fileRow = (v: PanelVault, f: Item) => {
     const tip = `${inDropbox(v, f.path)} — clique para abrir, ⌥ clique para mostrar no Finder`;
     return h('div', { class: 'rv-tl-file', title: tip, 'aria-label': tip, onclick: (e: MouseEvent) => go(portal(v, f.path, e.altKey ? 'vault' : 'open')) },
-      h('span', { class: 'rv-tl-ic' }, h('span', { class: 'rv-tl-ext' + (f.ext === 'pdf' ? ' rv-tl-pdf' : '') }, f.ext.toUpperCase().slice(0, 4) || 'ARQ')),
+      h('span', { class: 'rv-tl-ic' }, h('span', { class: 'rv-tl-ext' + (f.ext === 'pdf' ? ' rv-tl-pdf' : '') }, f.ext.toUpperCase().slice(0, 5) || 'ARQ')),
       h('span', { class: 'rv-tl-name' }, f.label));
   };
   /** A note: its name, a click shows it here as Roam blocks, a double click opens the viewer. */
@@ -597,6 +589,64 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
       rows.push(() => where(v, base, countOf(d)));
       rows.push(...timeline(v, d, base + '/', tags));
     }
+  }
+  // RahalOS: the notes that link here, after the page's own folder and in the same style: the note's
+  // name, where it is (Hub, Area, folders) in grey, and the linking blocks under it as a short excerpt.
+  // A click on the name shows the whole note here, a double click opens it in its app.
+  const placeOf = (v: PanelVault, path: string) => {
+    const parts = inDropbox(v, path).split('/'); parts.pop();
+    const hub = HUBS.test(parts[0] ?? '') ? parts.shift()! : '';
+    const area = hub && parts.length ? parts.shift()!.replace(new RegExp(`^${hub} - `), '') : '';
+    const rest = parts.map((p) => p.startsWith('_ARCHIVE') ? 'Arquivo' : p.startsWith('_RESOURCES') ? 'Recursos' : p.startsWith('_PROJECTS') ? '' : p.replace(/^\d{4}(?:[-_]\d{2}){0,2} - /, ''))
+      .filter(Boolean);
+    return { hub, trail: [area, ...rest].filter(Boolean).join(' › ') };
+  };
+  // A Markdown table row reads as its cells, not as pipes.
+  const unpiped = (text: string) => {
+    const m = text.match(/^\s*\|(.*)\|\s*$/);
+    return m ? m[1].split('|').map((c) => c.trim()).filter(Boolean).join(' · ') : text;
+  };
+  const mentionRow = (v: PanelVault, b: Backlink, tag: string | undefined) => {
+    const k = `${v.id}\nlinks\n${b.path}`;
+    const box = h('div', { class: 'rv-content rv-tl-preview' });
+    const row = h('div', { class: 'rv-tl-file rv-tl-md' });
+    const set = (open: boolean) => {
+      row.classList.toggle('rv-tl-open', open); box.hidden = !open; snip.hidden = open;
+      if (open && !box.childNodes.length) box.append(preview(v, b.path)());
+    };
+    const toggle = () => {
+      const open = box.hidden;
+      groupOpen.delete(k); groupOpen.set(k, open);
+      if (groupOpen.size > 500) groupOpen.delete(groupOpen.keys().next().value!);
+      set(open);
+    };
+    const tip = `${inDropbox(v, b.path)} — clique para ver a nota aqui, duplo clique para abrir no Typora, ⌥ clique para mostrar no Finder`;
+    row.setAttribute('title', tip); row.setAttribute('aria-label', tip);
+    row.addEventListener('click', (e) => (e.altKey ? go(portal(v, b.path)) : toggle()));
+    row.addEventListener('dblclick', (e) => { e.preventDefault(); go(portal(v, b.path, 'open')); });
+    const at = placeOf(v, b.path);
+    row.append(icon(DOC), h('span', { class: 'rv-tl-name' }, b.title),
+      h('span', { class: 'rv-tl-loc' }, at.hub ? h('span', { class: 'rv-tl-hub rv-tl-sm', style: `background: var(--hub-${at.hub.toLowerCase()}-color, #8a9ba8)` }, at.hub) : null,
+        h('span', { class: 'rv-tl-trail' }, at.trail)));
+    if (tag) row.append(h('span', { class: 'rv-tagref' }, `#${tag}`));
+    const snip = h('div', { class: 'rv-tl-snip' });
+    // Two links in one block are one reference, as in Roam.
+    const draw = () => snip.replaceChildren(...b.lines.filter((l, i) => !b.lines.slice(0, i).some((x) => (x.at ?? x.line) === (l.at ?? l.line)))
+      .map((l) => referenceEl({ text: unpiped(l.text), line: l.at ?? l.line, up: [], kids: l.kids ?? [], cut: l.cut }, b.path, v.act, find || undefined, filtering)));
+    draw();
+    // Its lines are read before it is drawn (see `ahead`); if that failed, they are filled in here.
+    if (b.unread) v.act.lines([b]).then(draw, () => {});
+    set(groupOpen.get(k) ?? false);
+    return h('div', {}, row, snip, box);
+  };
+  // A linking note inside the page's folder is listed there already.
+  const outside = (r: PageResult) => { const inside = new Set((r.inFolders ?? []).map((f) => f.path)); return r.backlinks.filter((b) => !inside.has(b.path)); };
+  const linking = list.reduce((n, { r }) => n + outside(r).length, 0);
+  if (linking) rows.push(() => heading('Mencionada em', linking));
+  for (const { v, r } of list) for (const b of outside(r)) {
+    const tag = tagOnce(v, b.path);
+    if (b.unread) unread.set(rows.length, { v, b });
+    rows.push(() => mentionRow(v, b, tag));
   }
   for (const { v, r } of list) for (const t of r.tagged) {
     const tag = tagOnce(v, t.path);

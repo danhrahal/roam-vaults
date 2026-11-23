@@ -413,12 +413,13 @@ test('the notes in a folder named like the page are listed, the nearest first', 
   // A namespaced title matches a folder by its path's end.
   assert.deepEqual(await inFolders('Areas/Home'), ['Areas/Home/Garden.md', 'Areas/Home/Home.md', 'Areas/Home/Bills/2026.md']);
   assert.deepEqual(await inFolders('Work/Home'), []);
-  // A note that is the page, or links to it, is listed as that, and not again for its folder.
+  // A note that is the page is listed as that, and not again for its folder. RahalOS: a note that
+  // links to the page stays in its folder too (the panel leaves it out of the mentions).
   const home = await e.query('Home');
   assert.deepEqual(home.counterparts.map((c) => c.path), ['Areas/Home/Home.md', 'Other/Home.md']);
   assert.deepEqual(home.backlinks.map((b) => b.path), ['Areas/Home/Bills/2026.md']);
   // `from`: where the folder named like the page starts in the path.
-  assert.deepEqual(home.inFolders, [{ path: 'Areas/Home/Garden.md', title: 'Garden', from: 6, at: 11 }]);
+  assert.deepEqual(home.inFolders, [{ path: 'Areas/Home/Garden.md', title: 'Garden', from: 6, at: 11 }, { path: 'Areas/Home/Bills/2026.md', title: '2026', from: 6, at: 11 }]);
   assert.deepEqual((await e.query('Areas/Home')).inFolders.map((n) => n.from), [0, 0, 0], 'a folder at the top of the vault');
   assert.deepEqual((await e.query('P - Build the shed')).inFolders.map((n) => n.path.slice(n.from).split('/')[0]),
     ['p - build the SHED', 'P - Build the shed', 'P - Build the shed', 'P - Build the shed', 'P - Build the shed']);

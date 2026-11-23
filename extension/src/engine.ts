@@ -393,7 +393,9 @@ export class VaultEngine {
     tagged.sort((x, y) => x.title.localeCompare(y.title) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
     // Close names only for a page no note is: next to an exact match they would mostly be noise.
     const shown = new Set([...strong, ...srcs]);
-    const inFolders = this.inFolders(title, shown);
+    // RahalOS: the page's folder lists every file in it, notes that link here too (the panel then
+    // leaves them out of the notes that mention the page).
+    const inFolders = this.inFolders(title, new Set(strong));
     for (const n of inFolders) shown.add(n.path);
     for (const t of tagged) shown.add(t.path);
     const fuzzy = counterparts.length ? [] : this.fuzzy(title, MAX_FUZZY).filter((f) => !shown.has(f.path));

@@ -378,3 +378,11 @@ for (const how of ['listed', 'handed over in batches'] as const) {
     assert.deepEqual(progress.at(-1), [stats.notes, stats.notes]);
   });
 }
+
+test('an embedded picture is found the way a link is, and is never a note', async () => {
+  const e = await fresh(memFS({ 'A.md': '![[crumb.png]]', 'sub/B.md': '![x](pictures/crumb.png)', 'pictures/crumb.png': 'png', 'crumb.md': 'a note of the same name' }));
+  assert.equal(e.resolveFile('crumb.png', 'A.md'), 'pictures/crumb.png');
+  assert.equal(e.resolveFile('pictures/crumb.png', 'sub/B.md'), 'pictures/crumb.png');
+  assert.equal(e.resolveFile('crumb', 'A.md'), null);
+  assert.equal(e.resolveFile('missing.png', 'A.md'), null);
+});

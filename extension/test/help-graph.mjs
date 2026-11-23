@@ -8,6 +8,7 @@
 //   npm run build && node test/help-graph.mjs [out-dir]
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright');
 
@@ -43,19 +44,36 @@ export const PAGES = {
 /** A page as Roam's Markdown export writes it: "- " blocks, four spaces a level. */
 export const exported = (blocks, depth = 0) => blocks.map(([text, kids = []]) => `${'    '.repeat(depth)}- ${text}\n${exported(kids, depth + 1)}`).join('');
 // The vault: the export of those pages, the daily note filed by year as in a vault kept by hand.
-const FILES = { 'Wholesale.md': exported(PAGES.Wholesale), 'Days/2026/July 9th, 2026.md': exported(PAGES['July 9th, 2026']), 'Sourdough.md': exported(PAGES[PAGE]) };
+/** A made-up picture, 320 x 200: a PNG of bands of colour. */
+function picture() {
+  const W = 320, H = 200, raw = Buffer.alloc(H * (1 + W * 3));
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) raw.set([180 + ((x >> 4) % 2) * 40, 140 + ((y >> 4) % 2) * 40, 90], y * (1 + W * 3) + 1 + x * 3);
+  const chunk = (type, data) => { const b = Buffer.concat([Buffer.from(type), data]), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(zlib.crc32(b)); return Buffer.concat([len, b, crc]); };
+  const head = Buffer.alloc(13); head.writeUInt32BE(W, 0); head.writeUInt32BE(H, 4); head.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+// A block that names another block: Roam's ((uid)), Obsidian's [[Note#^id]]. And a link to a heading.
+const COLD = 'Cold proof: **18 hours** at 4°';
+const FILES = {
+  'Proofing.md': `## Warm\n\n- two hours at 26°\n\n## Cold\n\n- ${COLD} ^cold\n`,
+  'Rota.md': '- [[Focaccia]] goes in after ((the cold proof))\n- [[Focaccia]] timing: see [[Proofing#Cold]]\n'.replace('((the cold proof))', '[[Proofing#^cold]]'),
+  // embeds: a block, a heading with what is under it, a whole note, and a picture kept in the vault
+  'Embeds.md': '- [[Ciabatta]] block ![[Proofing#^cold]]\n- [[Ciabatta]] heading ![[Proofing#Warm]]\n- [[Ciabatta]] note ![[Proofing]]\n- [[Ciabatta]] crumb ![open crumb](pictures/crumb.png)\n',
+  'pictures/crumb.png': picture(),
+  'Wholesale.md': exported(PAGES.Wholesale), 'Days/2026/July 9th, 2026.md': exported(PAGES['July 9th, 2026']), 'Sourdough.md': exported(PAGES[PAGE]) };
 
 const browser = await chromium.launch({ env: { ...process.env, LC_ALL: 'C.UTF-8' } });
 const page = await (await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2 })).newPage();
 const errors = [];
 page.on('pageerror', (e) => { errors.push(e.message); console.log('[pageerror]', e.message.slice(0, 300)); });
+await page.route('https://example.com/pictures/crumb.png', (r) => r.fulfill({ contentType: 'image/png', body: picture() }));
 await page.goto('https://roamresearch.com/#/app/help', { waitUntil: 'domcontentloaded' });
 await page.waitForFunction(() => window.roamAlphaAPI && document.querySelector('.rm-title-display, .roam-log-container'), null, { timeout: 90000 });
 await page.waitForTimeout(3000);
 await page.addStyleTag({ content: '.bp3-portal .bp3-toast-container{display:none!important}' }); // the help graph's own warning
 
 // the pages, in the graph's memory
-await page.evaluate(async (PAGES) => {
+await page.evaluate(async ({ PAGES, COLD }) => {
   const api = window.roamAlphaAPI;
   let n = 0;
   const add = async (parent, blocks) => {
@@ -71,7 +89,17 @@ await page.evaluate(async (PAGES) => {
     try { await api.createPage({ page: { title, uid } }); } catch (e) { if (!api.pull('[:block/uid]', [':node/title', title])) throw new Error(`page ${title}: ${e?.message ?? e}`); }
     await add(api.pull('[:block/uid]', [':node/title', title])[':block/uid'], blocks);
   }
-}, PAGES);
+  await api.createPage({ page: { title: 'Proofing', uid: 'rvhgproof' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgproof', order: 0 }, block: { string: 'Warm', uid: 'rvhgwarm0', heading: 2, open: true } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgwarm0', order: 0 }, block: { string: 'two hours at 26°', uid: 'rvhgwarm1' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgproof', order: 1 }, block: { string: 'Cold', uid: 'rvhgcold0', heading: 2, open: true } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgcold0', order: 0 }, block: { string: COLD, uid: 'rvhgcold1' } });
+  await api.createPage({ page: { title: 'Embeds', uid: 'rvhgembed' } });
+  for (const [i, string] of ['[[Ciabatta]] block {{[[embed]]: ((rvhgcold1))}}', '[[Ciabatta]] heading {{[[embed]]: ((rvhgwarm0))}}', '[[Ciabatta]] note {{[[embed]]: [[Proofing]]}}', '[[Ciabatta]] crumb ![open crumb](https://example.com/pictures/crumb.png)'].entries())
+    await api.createBlock({ location: { 'parent-uid': 'rvhgembed', order: i }, block: { string, uid: 'rvhgembe' + i } });
+  await api.createPage({ page: { title: 'Rota', uid: 'rvhgrota1' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgrota1', order: 0 }, block: { string: '[[Focaccia]] goes in after ((rvhgcold1))', uid: 'rvhgrota2' } });
+}, { PAGES, COLD });
 
 // the vault, in the browser's private file system, connected through the folder picker (stubbed)
 await page.evaluate(async ({ FILES, code }) => {
@@ -81,7 +109,7 @@ await page.evaluate(async ({ FILES, code }) => {
     const parts = rel.split('/'); let d = vault;
     for (const s of parts.slice(0, -1)) d = await d.getDirectoryHandle(s, { create: true });
     const w = await (await d.getFileHandle(parts.at(-1), { create: true })).createWritable();
-    await w.write(text); await w.close();
+    await w.write(typeof text === 'string' ? text : new Uint8Array(text)); await w.close();
   }
   window.showDirectoryPicker = async () => vault;
   const ext = (await import(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })))).default;
@@ -93,7 +121,7 @@ await page.evaluate(async ({ FILES, code }) => {
   window.ReactDOM.render(window.React.createElement(cfg.settings.find((s) => s.action?.component).action.component), box);
   await new Promise((r) => setTimeout(r, 300));
   [...box.querySelectorAll('button')].find((b) => b.textContent === 'Add vault folder').click();
-}, { FILES, code });
+}, { FILES: Object.fromEntries(Object.entries(FILES).map(([k, v]) => [k, typeof v === 'string' ? v : [...v]])), code });
 
 const open = async (title) => {
   await page.evaluate((title) => window.roamAlphaAPI.ui.mainWindow.openPage({ page: { title } }), title);
@@ -113,7 +141,7 @@ const measure = () => page.evaluate(() => {
   const ITEM = {
     crumbs: '.rm-zoom', crumb: '.rm-zoom-item-content', chevron: '.rm-mention-icon', controls: '.rm-block__controls', caret: '.block-expand .rm-caret', bullet: '.rm-bullet__inner',
     text: '.rm-block-text', link: '.rm-block-text .rm-page-ref--link', bracket: '.rm-block-text .rm-page-ref__brackets', tag: '.rm-page-ref--tag', alias: '.rm-alias', bold: '.rm-bold', italic: '.rm-italics',
-    highlight: '.rm-highlight', attr: '.rm-attr-ref', checkbox: '.checkmark', kids: '.rm-block-children', multibar: '.rm-multibar',
+    highlight: '.rm-highlight', blockref: '.rm-block-ref', embed: '.rm-embed-container', embedbar: '.rm-embed-margin-action', embedtitle: 'h3.rm-page__title', img: '.rm-inline-img', imgbox: '.rm-inline-img__resize', attr: '.rm-attr-ref', checkbox: '.checkmark', kids: '.rm-block-children', multibar: '.rm-multibar',
   };
   const STYLE = ['color', 'backgroundColor', 'fontSize', 'lineHeight', 'fontWeight', 'fontStyle', 'opacity', 'marginTop', 'marginLeft', 'paddingTop', 'paddingLeft', 'borderTopColor', 'borderTopWidth'];
   const r1 = (n) => Math.round(n * 10) / 10;
@@ -127,12 +155,14 @@ const measure = () => page.evaluate(() => {
     }
     return out;
   };
+  /** What an element says, without Roam's counts of references to an embedded block or page. */
+  const said = (e) => e.innerText.split('\n').filter((l) => !/^\d+$/.test(l)).join('\n');
   const groups = (root) => Object.fromEntries([...root.querySelectorAll('.rm-ref-page-view')].map((g) => {
     const title = g.querySelector('.rm-page__title').textContent;
     const p = parts(g, GROUP);
     for (const t of p.title) delete t.w; // a vault title has the note's folders before its name
     for (const i of p.item) { delete i.y; delete i.h; } // Roam's order inside a page is its own; each box is measured below
-    const items = Object.fromEntries([...g.querySelectorAll('.rm-reference-item')].map((it) => [it.querySelector('.rm-block-text').innerText, { parts: parts(it, ITEM), text: [...it.querySelectorAll('.rm-zoom-item-content, .rm-block-text')].map((e) => e.innerText) }]));
+    const items = Object.fromEntries([...g.querySelectorAll('.rm-reference-item')].map((it) => [said(it.querySelector('.rm-block__input')), { parts: parts(it, ITEM), text: [...it.querySelectorAll('.rm-zoom-item-content, .rm-block__input')].map(said) }]));
     return [title.slice(title.lastIndexOf('/') + 1), { parts: p, items, height: r1(g.getBoundingClientRect().height) }];
   }));
   const left = (e) => r1(e.getBoundingClientRect().left);
@@ -245,6 +275,44 @@ await page.waitForSelector('.rv-viewer .roam-block-container');
 check('a click on a bullet opens the note with that block marked', (await page.locator('.rv-viewer .block-highlight-yellow .rm-block-text').innerText()).includes('trial bake'));
 await page.screenshot({ path: path.join(OUT, '7-note-opened.png') });
 await page.keyboard.press('Escape');
+
+// ---------- a block that names another block, and a link to a heading ----------
+await open('Focaccia');
+await page.waitForSelector('.rv-panel .rm-reference-item');
+await page.waitForFunction((t) => document.querySelector('.rv-panel .rm-block-ref')?.textContent === t, COLD.replaceAll('*', ''));
+await page.waitForTimeout(500);
+await shot('8-block-reference.png');
+{
+  const m = await measure();
+  const only = (g) => ({ Rota: g.Rota && { ...g.Rota, parts: { caret: g.Rota.parts.caret, title: g.Rota.parts.title }, height: 0, items: Object.fromEntries(Object.entries(g.Rota.items).filter(([t]) => t.includes('goes in after'))) } });
+  compare({ ...m, roam: only(m.roam), vault: only(m.vault) }, 'block reference');
+}
+await page.locator('.rv-panel .rm-block-ref').click();
+await page.waitForSelector('.rv-viewer .roam-block-container');
+check('a click on a block reference opens the note with that block marked', (await page.locator('.rv-viewer .block-highlight-yellow .rm-block-text').first().innerText()) === COLD.replaceAll('*', ''));
+await page.keyboard.press('Escape');
+const head = page.locator('.rv-panel .rm-page-ref--link', { hasText: 'Proofing > Cold' });
+check('a link to a heading reads "Note > Heading"', await head.count() === 1);
+await head.click();
+await page.waitForSelector('.rv-viewer .roam-block-container');
+check('and opens the note with the heading marked', (await page.locator('.rv-viewer .block-highlight-yellow .rm-block-text').first().innerText()) === 'Cold');
+await page.screenshot({ path: path.join(OUT, '9-heading-opened.png') });
+await page.keyboard.press('Escape');
+
+// ---------- embeds and a picture from the vault ----------
+await page.setViewportSize({ width: 1440, height: 1800 });
+await open('Ciabatta');
+await page.waitForSelector('.rv-panel .rm-embed--page');
+await page.waitForFunction(() => [...document.querySelectorAll('.roam-article .rm-inline-img')].length === 2 && [...document.querySelectorAll('.roam-article .rm-inline-img')].every((i) => i.complete && i.naturalWidth === 320));
+await page.waitForTimeout(800);
+await shot('10-embeds.png');
+compare(await measure(), 'embeds');
+for (const root of ['.roam-article .rm-reference-container', '.roam-article .rv-panel']) await page.locator(`${root} .rm-embed--page > .rm-embed-margin-action`).click();
+await page.waitForSelector('.rv-panel .rm-embed__content .roam-block-container');
+await page.waitForTimeout(800);
+await shot('11-note-embed-open.png');
+check('the bar at a note embed\'s left opens the note in place, as a page embed opens in Roam', JSON.stringify(await page.locator('.rv-panel .rm-embed__content .rm-block-text').allInnerTexts()) === JSON.stringify(await page.locator('.rm-reference-container .rm-embed__content > .rm-block-children .rm-block-text').allInnerTexts()));
+check('a page embedded by Roam lists its own vault references, not the page\'s', await page.evaluate(() => document.querySelector('.rm-reference-container .rm-embed--page .rv-panel')?.dataset.title === 'Proofing'));
 fs.writeFileSync(path.join(OUT, 'measured.json'), JSON.stringify(await measure(), null, 1));
 
 check('no errors in the page', !errors.length, errors.join(' | ').slice(0, 500));

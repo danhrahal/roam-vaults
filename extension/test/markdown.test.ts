@@ -51,7 +51,10 @@ test('page links, aliases and tags are Roam\'s elements, from Roam\'s spelling a
   assert.deepEqual(parts('see [[Dark rye]] now'), ['see ', ref('Dark rye'), ' now']);
   assert.deepEqual(parts('[Rye]([[Dark rye]])'), ['<a.rm-alias.rm-alias--page{Dark rye}:Rye>']);
   assert.deepEqual(parts('[[Dark rye|Rye]]'), ['<a.rm-alias.rm-alias--page{Dark rye}:Rye>']);
-  assert.deepEqual(parts('[[Dark rye#Proof]]'), [ref('Dark rye', 'Dark rye#Proof')]);
+  assert.deepEqual(parts('[[Dark rye#Proof]]'), [ref('Dark rye', 'Dark rye > Proof')]);
+  assert.deepEqual(parts('[[Dark rye#Method#Proof]]'), [ref('Dark rye', 'Dark rye > Method > Proof')]);
+  assert.deepEqual(parts('[[#Proof]]'), [ref('', 'Proof')]);
+  assert.deepEqual(parts('[[Dark rye#^fold]]'), ['<span.rm-block-ref.dont-focus-block{Dark rye}:(<span:Dark rye#^fold>)>']);
   assert.deepEqual(parts('[note](Folder/Dark%20rye.md)'), ['<a.rm-alias.rm-alias--page{Folder/Dark rye.md}:note>']);
   assert.deepEqual(parts('#wholesale and #[[two words]] and #a/b'), ['<span.rm-page-ref.rm-page-ref--tag{wholesale}:#wholesale>', ' and ', '<span.rm-page-ref.rm-page-ref--tag{two words}:#two words>', ' and ', '<span.rm-page-ref.rm-page-ref--tag{a/b}:#a/b>']);
   assert.deepEqual(parts('issue #12 and a#b'), ['issue #12 and a#b']);
@@ -93,4 +96,28 @@ test('what Obsidian hides or ticks is hidden or ticked: comments, block ids, any
   for (const s of ['x', '/', '-', '?', '!']) assert.equal(String(body(`[${s}] order flour`)[1]).startsWith('span.rm-checkbox rm-done'), true, s);
   assert.equal(String(body('[ ] order flour')[1]).startsWith('span.rm-checkbox rm-todo'), true);
   assert.deepEqual(body('[1] Smith 2020'), [0, '[1] Smith 2020']);
+});
+
+test('a link keeps the heading or block it names, for the click', () => {
+  const root = new El('div');
+  inline(root as unknown as HTMLElement, '[[Dark rye#Proof]] [[Dark rye#^fold|the fold]] [m](Dark%20rye.md#Proof) [[Dark rye]]');
+  const subs: (string | undefined)[] = [];
+  const walk = (k: El | string) => { if (typeof k === 'string') return; if (k.dataset.rvTarget !== undefined) subs.push(k.dataset.rvSub); k.kids.forEach(walk); };
+  root.kids.forEach(walk);
+  assert.deepEqual(subs, ['#Proof', '#^fold', '#Proof', undefined]);
+});
+
+test('embeds: a picture of the vault is Roam\'s image, a note, heading or block starts as its link', () => {
+  const seen = (s: string) => { const root = new El('div'); inline(root as unknown as HTMLElement, s); return root.kids[0] as El; };
+  const one = (k: El): El => (k.kids[0] as El).kids[0] as El;
+  for (const [s, target, alt, width] of [['![[crumb.png]]', 'crumb.png', '', '500px'], ['![[pictures/crumb.PNG|300]]', 'pictures/crumb.PNG', '', '300px'], ['![open crumb](pictures/crumb%20one.png)', 'pictures/crumb one.png', 'open crumb', '500px'], ['![open crumb|120x80](crumb.jpg)', 'crumb.jpg', 'open crumb', '120px']] as const) {
+    const box = seen(s), i = one(box) as any;
+    assert.deepEqual([box.className, i.dataset.rvImg, i.alt, (box.style as any).width], ['rm-inline-img__resize hoverparent', target, alt, width], s);
+  }
+  // a picture on the web is not fetched: it stays a link, as before
+  assert.equal(seen('![x](https://example.com/a.png)').className, 'rm-alias rm-alias--external');
+  for (const [s, target, sub] of [['![[Proofing]]', 'Proofing', undefined], ['![[Proofing#Cold]]', 'Proofing', '#Cold'], ['![[Proofing#^cold]]', 'Proofing', '#^cold'], ['![[plan.pdf]]', 'plan.pdf', undefined]] as const) {
+    const box = seen(s);
+    assert.deepEqual([box.tag, box.dataset.rvEmbed, box.dataset.rvEmbedSub, box.textContent.startsWith('[[📎 ')], ['span', target, sub, true], s);
+  }
 });

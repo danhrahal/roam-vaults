@@ -15,7 +15,7 @@ Roam has none, leave it out rather than invent UI.
 - **OKF v0.3**, read from the spec and tried with a made-up bundle. The GoogleCloudPlatform
   repository was deprecated on 2026-11-18 in favour of the one linked above.
 - **Roam 0.13.14**, measured in the public help graph: Linked References, clicks and modifiers, and
-  the Markdown export. Roam's elements for embeds, block references and tables have not been
+  the Markdown export. Block references, embeds and inline images are measured too. Roam's tables have not been
   measured yet.
 - **Today** is the extension's source as of the pull request that added this page.
 
@@ -30,10 +30,10 @@ Roam has none, leave it out rather than invent UI.
 | Daily note | Folder and date format from `daily-notes.json` | Daily page | Daily page matches the daily note; the format is read | A date in a property does not link to the daily page |
 | Wikilink | Opens the note in the same tab | Page reference | Roam's element; click opens the page, shift-click the sidebar | None |
 | Link with text `[[A\|b]]`, `[b](A.md)` | Shows `b` | Alias `[b]([[A]])` | Roam's alias element | None |
-| Heading link `[[A#H]]` | Shows "A > H", scrolls to the heading | Reference to the heading block | The heading is dropped; opens at the top | Keep the heading; open the note at that block |
-| Block id `^id`, `[[A#^id]]` | The id is hidden; the link opens and flashes the block | Block reference `((uid))` | `^id` is hidden; the link shows `A#^id` | Draw as a Roam block reference with the block's text |
-| Embed `![[A]]`, `![[A#H]]`, `![[A#^id]]` | The note, section or block drawn in place | `{{embed}}` | A paper-clip link | Draw in place, lazily, with a depth limit |
-| Image and PDF embed | Image with a width; PDF viewer | Inline image; `{{pdf}}` | Not shown | Show local images inline, read from the folder (decided 2026-11-22) |
+| Heading link `[[A#H]]` | Shows "A > H", scrolls to the heading | Reference to the heading block | Reads "A > H"; a click opens the note with the heading marked | None |
+| Block id `^id`, `[[A#^id]]` | The id is hidden; the link opens and flashes the block | Block reference `((uid))` | `^id` is hidden; the link is Roam's block reference with the block's text, and a click opens the note at that block | None |
+| Embed `![[A]]`, `![[A#H]]`, `![[A#^id]]` | The note, section or block drawn in place | `{{embed}}` | Roam's embed elements: a block or heading with what is under it; a note as its title, opened from the bar at its left. Three levels deep | None |
+| Image and PDF embed | Image with a width; PDF viewer | Inline image; `{{pdf}}` | Images show inline, read from the folder, with Obsidian's width. A PDF is a link | PDFs are not shown |
 | Tag, nested `#a/b` | Tag pane; a parent tag counts its children | A tag is a page; `a/b` is a namespace | The tag's page lists tagged notes, parents too | None |
 | Frontmatter `tags` | The list form only. A comma string makes no tags in 1.15.1 | Tags in a block | The list form, or one tag as a string | None |
 | Properties | Typed widgets; links are clickable | Attributes `Name:: value`; the attribute's page lists every use | `key:: value` blocks with a clickable key | Values are raw YAML; no list of notes per property |
@@ -88,7 +88,7 @@ Obsidian keeps them in the file name and in wikilinks.
 | `tags` | A list | Tags | The list form, or one tag as a string | None |
 | Body text | Hard-wrapped paragraphs, GFM tables, footnotes | Blocks | Wrapped lines joined; raw pipes | Draw tables |
 | Bundle | A folder of OKF files | A vault | Any folder is a vault | Detect a bundle and switch to OKF's rules |
-| Anchor `file.md#section` | A link to a section | Reference to the heading block | Dropped | Same as Obsidian heading links |
+| Anchor `file.md#section` | A link to a section | Reference to the heading block | A click opens the note with the heading marked | None |
 
 ## Roam's side
 
@@ -104,6 +104,9 @@ What the extension copies from Roam, measured in Linked References:
   for, so there it only follows a link under the pointer.
 - The section folds from its caret. The header text does nothing.
 - `[[` `]]` are left out of the page entirely when the user hides them.
+- A page embed starts closed, as its title on a grey band; the bar at its left opens and closes it.
+  A block embed shows the block and its children at once.
+- An image is 500 wide until it is resized.
 - A Markdown export writes one `- ` bullet per block, four spaces a level, the page title as the
   file name, `/` in a title as a folder, and Roam's own inline syntax unchanged (`{{[[TODO]]}}`,
   `^^highlight^^`, `__italics__`, `Name::`).
@@ -111,13 +114,11 @@ What the extension copies from Roam, measured in Linked References:
 ## What is left, in rough order
 
 1. OKF: show `title` as the note's name, link order per the spec, path fields as backlinks.
-2. Heading and block links as Roam block references.
-3. Embeds drawn in place.
-4. Properties as attributes: typed values, OKF path fields as backlinks, a page per property key.
-5. A note in the main window and the sidebar, in place of the dialog.
-6. Tables and numbered lists.
-7. Linked References' search and filter on the vault section, and its right-click menus.
-8. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
+2. Properties as attributes: typed values, OKF path fields as backlinks, a page per property key.
+3. A note in the main window and the sidebar, in place of the dialog.
+4. Tables and numbered lists.
+5. Linked References' search and filter on the vault section, and its right-click menus.
+6. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
 
 ## What cannot be mapped
 

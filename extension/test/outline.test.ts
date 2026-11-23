@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contextOf, kidsAt, MAX_KIDS } from '../src/core/outline.ts';
+import { contextOf, kidsAt, lineOfSub, MAX_KIDS } from '../src/core/outline.ts';
 
 // A page as Roam's Markdown export writes it: "- " blocks, four spaces a level.
 const day = [
@@ -129,4 +129,16 @@ test('a heading comes with what it owns, up to the next heading of its level', (
   assert.deepEqual(c.kids.map((k) => k.text), ['Added the rye loaf', 'A note.', '### Later']);
   assert.deepEqual(c.kids[0].kids.map((k) => k.text), ['by Ines']);
   assert.deepEqual(c.kids[2].kids.map((k) => k.text), ['More']);
+});
+
+test('the line a link names: a heading by its text, a block by its id', () => {
+  const note = ['# Dark rye', '', '## Mix & fold', '- fold four times ^fold', '- rest', '', 'Bake hot, with steam.', '^bake', '', '### Proof'].join('\n');
+  assert.equal(lineOfSub(note, '#Mix & fold'), 2);
+  assert.equal(lineOfSub(note, '#mix fold'), 2); // letter case and punctuation don't count, as in Obsidian
+  assert.equal(lineOfSub(note, '#Mix & fold#Proof'), 9);
+  assert.equal(lineOfSub(note, '#^fold'), 3);
+  assert.equal(lineOfSub(note, '#^bake'), 6); // an id on its own line names the block above it
+  assert.equal(lineOfSub(note, '#Shape'), undefined);
+  assert.equal(lineOfSub(note, '#^fol'), undefined);
+  assert.equal(lineOfSub(note, '#'), undefined);
 });

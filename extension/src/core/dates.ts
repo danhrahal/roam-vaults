@@ -16,6 +16,12 @@ export function roamDailyToIso(title: string): string | null {
   const mo = MONTHS.indexOf(m[1]) + 1, d = +m[2], y = +m[3];
   return validIso(y, mo, d);
 }
+/** "2026-11-05" -> "November 5th, 2026", the title of that day's page in Roam. */
+export function isoToRoamDaily(iso: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m || !validIso(+m[1], +m[2], +m[3])) return null;
+  return `${MONTHS[+m[2] - 1]} ${ord(+m[3])}, ${+m[1]}`;
+}
 function validIso(y: number, mo: number, d: number): string | null {
   const dt = new Date(Date.UTC(y, mo - 1, d));
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;

@@ -238,9 +238,9 @@ async function main() {
   check('Each counts as an External Vault Reference', tHead.includes(`${before + 2} External Vault References`), tHead.split('\n')[0]);
   check('Nothing is drawn for the folder itself', await evalIn(() => !document.querySelector('.rv-panel .rv-file, .rv-panel .rv-count, .rv-panel .rv-files')));
   await shot('page-folder-notes');
-  await roam.page.locator('.roam-article .rv-panel .rv-note', { hasText: `Projects/${TEST_PAGE}/Plan` }).first().click().catch(() => {});
+  await roam.page.locator('.roam-article .rv-panel .rv-note', { hasText: `Projects/${TEST_PAGE}/Plan` }).first().click({ modifiers: ['Shift'] }).catch(() => {});
   const viewed = await waitFor('the note viewer', () => evalIn(() => { const v = document.querySelector('.rv-viewer'); return v && v.innerText.includes('The plan kept in the folder') && v.querySelector('h3')?.textContent.trim(); }), 8000).catch(() => null);
-  check('A note in the folder opens in the viewer', viewed === 'Plan', String(viewed));
+  check('A note in the folder opens over the page with a shift-click', viewed === 'Plan', String(viewed));
   await shot('page-folder-note-viewer');
   await roam.page.keyboard.press('Escape');
   await sleep(500);

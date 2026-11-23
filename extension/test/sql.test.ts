@@ -267,3 +267,22 @@ test('the folders table is filled from the notes of a database made before it', 
   migrate(db);
   assert.equal(dirs(), before);
 });
+
+test('a database from a build where the folders table was step 3 comes out whole', async () => {
+  const { files } = gen(200, 5);
+  const { db } = await openDb('test-' + Math.random());
+  const fs = memFS(files);
+  const e = new VaultEngine(fs, undefined, new SqlIndex(db));
+  await e.build();
+  const dirs = () => JSON.stringify(db.selectArrays('SELECT path, name, n FROM dirs ORDER BY path'));
+  const before = dirs();
+  // That build stopped at step 3 with the table made: the steps after it empty the notes and make the table again.
+  const { MIGRATIONS, migrate } = await import('../src/sql/schema.ts');
+  db.exec('PRAGMA user_version = 3');
+  migrate(db);
+  assert.equal(Number(db.selectValue('PRAGMA user_version')), MIGRATIONS.length);
+  assert.equal(dirs(), '[]', 'no folders are left over from notes that are gone');
+  const again = new VaultEngine(fs, undefined, new SqlIndex(db));
+  await again.build();
+  assert.equal(dirs(), before);
+});

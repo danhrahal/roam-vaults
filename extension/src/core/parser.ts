@@ -8,6 +8,8 @@ import {
   type Link, type ParsedNote, type ParseOptions, type Heading,
   F_TRIMMED, F_ESCAPED_PIPE, F_RELATIVE, F_ABSOLUTE, F_DECODE_FAIL, F_UNQUOTED_YAML, F_HAS_MD_EXT, F_EMPTY_ALIAS, F_ANGLE,
 } from './types.ts';
+import { RE_NOTE_PATH } from './outline.ts';
+const RE_ISO_DAY = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
 import { splitFrontmatter, extractAliases, extractFmTags } from './frontmatter.ts';
 
 const NL = 10, BS = 92, BT = 96, PCT = 37, LT = 60, DOL = 36, TILDE = 126;
@@ -202,6 +204,14 @@ function parseMdDest(dest: string): { target: string; subpath: string; flags: nu
   return { target: intern(path.normalize('NFC')), subpath: subpath && intern(subpath), flags };
 }
 
+/** A note's `title` property names it, as an alias does: in OKF it is the note's name, and the
+ *  file name is only a slug of it ("country-sourdough.md", title "Country Sourdough Loaf"). */
+function withTitle(aliases: string[], props: Record<string, string | string[]> | null, path: string): string[] {
+  const t = props && typeof props.title === 'string' ? props.title.trim().replace(/^(["'])(.*)\1$/, '$2').normalize('NFC') : '';
+  if (!t || t.toLowerCase() === basenameNoMd(path).toLowerCase() || aliases.includes(t)) return aliases;
+  return [...aliases, t];
+}
+
 export function basenameNoMd(path: string): string {
   const slash = path.lastIndexOf('/');
   const b = slash < 0 ? path : path.slice(slash + 1);
@@ -235,6 +245,16 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
         links.push({ kind: 'prop', embed: m[1] === '!', target: w.target, subpath: w.subpath, display: w.display,
           line: lineNo, col: m.index, flags, prop: intern(curKey),
           ...(opts.snippets ? { snippet: detach(l.trim().slice(0, 100)) } : {}) });
+      }
+      // A value that is a date is a reference to that day, as a date in a Roam attribute is; a value
+      // that is a path to a note (OKF's superseded_by, sources[].resource) is a link to that note.
+      const vm = /^\s*(?:-\s+)?(?:(?:"[^"]*"|'[^']*'|[^\s:#-][^:]*?)\s*:\s+)?(.+?)\s*$/.exec(l);
+      const inner = vm && /^\[(.*)\]$/.exec(vm[1]);
+      for (const part of vm ? (inner && !vm[1].startsWith('[[') ? inner[1].split(',') : [vm[1]]) : []) {
+        const v = part.trim().replace(/^(["'])(.*)\1$/, '$2');
+        const prop = { kind: 'prop' as const, embed: false, display: null, line: lineNo, col: 0, prop: intern(curKey), ...(opts.snippets ? { snippet: detach(l.trim().slice(0, 100)) } : {}) };
+        if (RE_ISO_DAY.test(v)) links.push({ ...prop, target: intern(v), subpath: '', flags: 0 });
+        else if (RE_NOTE_PATH.test(v)) { const d = parseMdDest(v); if (d) links.push({ ...prop, target: d.target, subpath: d.subpath, flags: d.flags }); }
       }
     }
   }
@@ -280,6 +300,13 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
     const raw = text.slice(m.index + m[0].length - m[2].length, m.index + m[0].length);
     headings.push({ level: m[1].length, text: detach(raw.replace(/\r$/, '').replace(/[ \t]+#+[ \t]*$/, '').trim()), line: lineOf(starts, m.index) });
   }
+  // An OKF log (log.md) is a list of entries under a heading per day, "## 2026-11-21": each day's
+  // entries are a reference to that day, as a block on a daily page is in Roam.
+  if (/(^|\/)log\.md$/i.test(path)) {
+    for (const h of headings) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(h.text)) links.push({ kind: 'wiki', embed: false, target: h.text, subpath: '', display: null, line: h.line, col: 0, flags: 0 });
+    }
+  }
   const blockIds: string[] = [];
   RE_BLOCKID.lastIndex = fm.bodyStart;
   while ((m = RE_BLOCKID.exec(masked))) {
@@ -290,7 +317,7 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
   return {
     path,
     title: basenameNoMd(path),
-    aliases: extractAliases(fm.props),
+    aliases: withTitle(extractAliases(fm.props), fm.props, path),
     tags: [...tagSet],
     links, headings, blockIds,
     props: fm.props,

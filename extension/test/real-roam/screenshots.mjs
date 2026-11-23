@@ -43,6 +43,7 @@ const VAULTS = {
     'Projects/Raised bed plan.md': '## Bed 2\n\n- [[Tomatoes]] along the back, basil in front\n- Leave room for a path on the north side\n',
     'Pests/Blight.md': '# Blight\n\nLate blight spreads fast in warm, wet weather.\n\n- Showed up on the [[Tomatoes]] after a wet week last August\n- Take off the leaves it is on and keep them out of the compost\n- Grow under cover if it comes back\n',
     'Seeds/Spring order.md': '- San Marzano and Sungold #tomatoes\n- Nantes carrots\n',
+    'Journal/2026-06-02.md': '- Greenhouse\n    - Tied the [[Tomatoes]] in to the top wire\n        - Took off the leaves below the first truss\n        - Fed with comfrey tea\n- Paths\n    - Laid bark between beds 1 and 2\n',
     'Soil/Fertilizer schedule.md': '# Fertilizer schedule\n\n- Comfrey tea every two weeks from June\n- Seaweed feed when the fruit sets\n',
     '.obsidian/app.json': '{}',
   },
@@ -160,12 +161,25 @@ async function main() {
   await snap('unfolded-note', { x: panel.x - 16, y: head.y - 12, width: panel.width + 32, height: next.y + next.height - head.y + 24 });
   await roam.page.locator('.roam-article .rv-group-caret').first().click();
 
-  // 4. The note viewer, opened from a line, with that line marked.
-  await roam.page.locator('.roam-article .rv-block', { hasText: 'Showed up on the' }).click();
-  await waitFor('the note viewer', () => evalIn(() => !!document.querySelector('.rv-viewer .rv-hl')), 10000);
+  // 4. The note in the main window, opened from a line, with that line marked.
+  await roam.page.locator('.roam-article .rv-panel .rm-block-main', { hasText: 'Showed up on the' }).locator('.rm-bullet').click();
+  await waitFor('the note in the main window', () => evalIn(() => !!document.querySelector('.rv-note-page .rv-hl')), 10000);
   await sleep(500);
-  await snap('note-viewer', await boxOf('.rv-viewer', 40));
-  await roam.page.keyboard.press('Escape');
+  await snap('note-viewer', await pageBox());
+  await evalIn(() => history.back());
+  await waitFor('the page again', async () => (await panelText()).includes('Passata'), 20000);
+  await sleep(300);
+
+  // 4b. A line from a nested list: the line it sits under above it, and its own children opened.
+  const nested = roam.page.locator('.roam-article .rv-panel .rm-block-main', { hasText: 'Tied the' });
+  await nested.hover();
+  await sleep(300);
+  await nested.locator('.rv-kids-caret').click();
+  await waitFor('the children of the line', () => evalIn(() => document.querySelector('.roam-article .rv-panel')?.innerText.includes('Fed with comfrey tea')), 10000);
+  await roam.page.mouse.move(5, 5);
+  await sleep(300);
+  await evalIn(() => [...document.querySelectorAll('.roam-article .rv-group')].find((g) => g.textContent.includes('Tied the'))?.setAttribute('data-rv-shot', ''));
+  await snap('nested-line', await boxOf('.roam-article .rv-group[data-rv-shot]', 16));
 
   // 5. A page no note is: a note with a similar name, the letter that differs marked.
   await openPage(SIMILAR_PAGE);

@@ -54,3 +54,15 @@ jobs:
 
       - name: Browser smoke test
         run: node test/browser-smoke.mjs
+
+      # Roam's real web app, public help graph, no sign-in: the section next to Roam's Linked References.
+      - name: Compare with Linked References in Roam's help graph
+        run: node test/help-graph.mjs "$RUNNER_TEMP/help-graph"
+
+      - name: Keep the help graph pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: help-graph
+          path: ${{ runner.temp }}/help-graph
+          if-no-files-found: ignore

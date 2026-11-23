@@ -7,6 +7,7 @@ import { RoamMatcher, type NoteHow } from './core/matcher.ts';
 import { FuzzyIndex, NAME } from './core/fuzzy-index.ts';
 import { diffMarks } from './core/fuzzy.ts';
 import type { Note } from './core/types.ts';
+import { contextOf, putLine, type ReadLine, type LineRead } from './core/outline.ts';
 
 export interface FileMeta { path: string; size: number; mtime: number }
 export interface VaultFS {
@@ -30,7 +31,10 @@ export type ReadBatch = (want: number[]) => Promise<(string | null)[]>;
 export type Cache = Map<string, Note>;
 
 export interface Counterpart { path: string; title: string; how: NoteHow; label: string }
-export interface BacklinkLine { line: number; text: string; embed: boolean; unresolved: boolean }
+/** A line of a note that links to the page. Once read, it comes as the block the line is in: its
+ *  text, the blocks above it (`up`, outermost first) and the blocks under it (`kids`). */
+export interface BacklinkLine extends ReadLine { line: number; embed: boolean; unresolved: boolean }
+
 export interface Backlink {
   path: string; title: string; lines: BacklinkLine[];
   /** The note has not been read for the text of its lines yet: lines() reads it. */
@@ -72,7 +76,6 @@ const TIER_ORDER: NoteHow[] = ['exact', 'case', 'alias', 'path', 'daily'];
 
 const MD = /\.md$/i;
 export const noteTitle = (path: string) => path.slice(path.lastIndexOf('/') + 1).replace(MD, '');
-const MAX_LINE = 240;
 const MAX_BACKLINK_NOTES = 200;
 /** Close-named notes shown under a page with no matching note. */
 const MAX_FUZZY = 5;
@@ -378,7 +381,7 @@ export class VaultEngine {
     for (const b of backlinks) b.lines.sort((x, y) => x.line - y.line);
     const first = backlinks.slice(0, withLines);
     const texts = await this.lines(first.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })));
-    first.forEach((b, i) => texts[i]?.forEach((t, j) => { b.lines[j].text = t; }));
+    first.forEach((b, i) => texts[i]?.forEach((t, j) => putLine(b.lines[j], t)));
     for (let i = first.length; i < backlinks.length; i++) backlinks[i].unread = true;
     const srcs = backlinks.map((b) => b.path);
     const seenTag = new Set<string>();
@@ -403,12 +406,12 @@ export class VaultEngine {
   }
 
   /** The text of some lines of some notes, as a page shows them. Null for a note that can't be read. */
-  async lines(items: { path: string; lines: number[] }[]): Promise<(string[] | null)[]> {
-    const out: (string[] | null)[] = items.map(() => null);
+  async lines(items: { path: string; lines: number[] }[]): Promise<(LineRead[] | null)[]> {
+    const out: (LineRead[] | null)[] = items.map(() => null);
     for (let i = 0; i < items.length; i += READS_AT_ONCE) {
       await Promise.all(items.slice(i, i + READS_AT_ONCE).map(async (it, k) => {
         const text = await this.text(it.path);
-        if (text !== null) out[i + k] = it.lines.map((n) => snippet(lineAt(text, n)));
+        if (text !== null) out[i + k] = contextOf(text, it.lines).map(({ text, line, up, kids, cut }) => ({ text, line, up, kids, ...(cut ? { cut } : {}) }));
       }));
     }
     return out;
@@ -443,6 +446,11 @@ export class VaultEngine {
   /** Resolve a [[link]] target as Obsidian would, from a given source note. */
   resolve(target: string, from: string): string | null {
     return this.idx.candidates(target, from).find((p) => MD.test(p)) ?? null;
+  }
+
+  /** The file an embed names that is not a note (an image), resolved the same way. */
+  resolveFile(target: string, from: string): string | null {
+    return this.idx.candidates(target, from).find((p) => !MD.test(p)) ?? null;
   }
 
   /** A note's text, from the few most recently read ones or from disk. */
@@ -494,17 +502,4 @@ export function outermost(folders: string[]): string[] {
 export function inFolder(path: string, folders: Set<string>): boolean {
   for (let i = path.indexOf('/'); i > 0; i = path.indexOf('/', i + 1)) if (folders.has(path.slice(0, i))) return true;
   return false;
-}
-
-/** One line of a text, without its line break. */
-function lineAt(text: string, line: number): string {
-  let s = 0;
-  for (let i = 0; i < line; i++) { s = text.indexOf('\n', s) + 1; if (s === 0) return ''; }
-  const e = text.indexOf('\n', s);
-  return text.slice(s, e < 0 ? text.length : e);
-}
-
-function snippet(line: string): string {
-  const s = line.replace(/^\s*(?:[-*+]|\d+\.)\s+(?:\[.\]\s+)?/, '').replace(/^#+\s+/, '').trim();
-  return s.length > MAX_LINE ? s.slice(0, MAX_LINE - 1) + '…' : s;
 }

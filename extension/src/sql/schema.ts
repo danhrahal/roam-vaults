@@ -37,10 +37,18 @@ export const MIGRATIONS: ((db: Db) => void)[] = [
     fuzzyMigration(db);
     db.exec('DELETE FROM link_names; DELETE FROM note_keys; DELETE FROM notes; DELETE FROM files; DELETE FROM meta;');
   },
+  // A note's title property is an alias, a log's days are links, and tags are read as Obsidian
+  // reads them: what was read before is read again.
+  (db) => db.exec('DELETE FROM fuzzy_name; DELETE FROM link_names; DELETE FROM note_keys; DELETE FROM notes; DELETE FROM files; DELETE FROM meta;'),
+  // 4: dates and paths to notes in properties are links now: read again.
+  (db) => db.exec('DELETE FROM fuzzy_name; DELETE FROM link_names; DELETE FROM note_keys; DELETE FROM notes; DELETE FROM files; DELETE FROM meta;'),
   // Every folder that holds a note, at any depth, with its lowercase name and how many notes are
   // under it: the folders a page title names are found by name. Filled from the notes already there.
+  // (A build of this from before it was step 5 may have left a table behind: made again.) A later
+  // step that empties notes has to empty dirs too.
   (db) => {
     db.exec(`
+      DROP TABLE IF EXISTS dirs;
       CREATE TABLE dirs(path TEXT PRIMARY KEY, name TEXT NOT NULL, n INTEGER NOT NULL) WITHOUT ROWID;
       CREATE INDEX dirs_name ON dirs(name);
     `);

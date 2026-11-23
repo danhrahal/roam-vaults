@@ -11,6 +11,7 @@ Roam's own references. You can read any note in Roam.
 References section, live updates and a read-only note viewer.
 
 - [`docs/FEASIBILITY.md`](docs/FEASIBILITY.md): findings, risks, proposed architecture and roadmap.
+- [`docs/MAPPING.md`](docs/MAPPING.md): every Obsidian and OKF concept, its closest Roam equivalent, what Vaults does with it and what is left.
 - [`extension/`](extension/): the extension. Its [README](extension/README.md) is the user guide shown in
   Roam Depot; [DEVELOPING.md](extension/DEVELOPING.md) covers building and loading it in developer mode.
 - [`docs/DEPOT-SUBMISSION.md`](docs/DEPOT-SUBMISSION.md): how to submit to Roam Depot, and the checklist.

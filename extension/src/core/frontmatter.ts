@@ -151,7 +151,8 @@ export function extractFmTags(props: Record<string, string | string[]> | null): 
   for (const key of Object.keys(props)) {
     if (!/^tags?$/i.test(key)) continue;
     const v = props[key];
-    const arr = Array.isArray(v) ? v : v.split(/[,\s]+/);
+    // a list gives its tags; a string is one tag when it can be one ("tags: a, b" gives none, as in Obsidian)
+    const arr = Array.isArray(v) ? v : /^#?[\p{L}\p{N}_/-]+$/u.test(v.trim()) ? [v] : [];
     for (const a of arr) {
       const t = a.trim().replace(/^#/, '');
       if (t && t !== '[object]') out.push(t.normalize('NFC'));

@@ -25,11 +25,19 @@ other. [Obsidian](https://obsidian.md) made the idea popular. See
 [Obsidian Flavored Markdown](https://help.obsidian.md/obsidian-flavored-markdown) for the link and tag
 syntax Vaults understands. You don't need Obsidian installed: any folder of Markdown notes works.
 
-That includes **Open Knowledge Format (OKF)** bundles. [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format)
-is an open format from Google Cloud for knowledge kept as plain Markdown files with YAML frontmatter
-([spec](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)). OKF uses standard
-Markdown links, including bundle-absolute ones like `[Customers](/tables/customers.md)`, and Vaults follows
-those as well as `[[wikilinks]]`.
+That includes **Open Knowledge Format (OKF)** bundles. [OKF](https://github.com/open-knowledge-format/open-knowledge-format)
+is an open format for knowledge kept as plain Markdown files with YAML frontmatter
+([spec](https://github.com/open-knowledge-format/open-knowledge-format/blob/main/SPEC.md)). Vaults reads a
+bundle the way OKF means it:
+
+- A note is found by its `title` as well as its file name, so the page **Country Sourdough Loaf** shows
+  `products/country-sourdough.md`.
+- A folder's `index.md` is the note for the page named like the folder: **Products** shows
+  `products/index.md`.
+- Each day of a `log.md` (`## 2026-11-21`) is a reference on that day's daily page, with the day's entries
+  under it.
+- Standard Markdown links are followed, including bundle-absolute ones like
+  `[Customers](/tables/customers.md)`, as well as `[[wikilinks]]`.
 
 </details>
 
@@ -45,11 +53,12 @@ kinds of notes, in this order:
   is the daily note for the same date. If several notes match, they're all shown. Click the caret to unfold
   the note and read it in place.
 - **Notes that link here.** These are notes that link to the matching note, or contain `[[This Page]]` even
-  when no such note exists. Links in frontmatter count too. Each linking line is shown like a Roam block.
+  when no such note exists. Links in frontmatter count too. Each linking line is shown as Roam shows a
+  reference: the block, with the headings and list items it sits under as a path above it.
 - **Notes in a folder named like this page.** A vault kept by folder, with one folder per project or area,
   often has no links back to the page. So every note inside a folder with the page's name (in any letter
   case, anywhere in the vault) is listed too, folded, the folder's own notes first and then the notes in its
-  subfolders. The part of the path above that folder is grey, so the folder's name stands out. For a Roam
+  subfolders. Its title reads from that folder on, with only the path above the folder in grey. For a Roam
   page `A/B`, the folder's path must end in `A/B`.
 - **Notes tagged here.** These are notes tagged `#this-page`, shown with the tag. A Roam namespace `a/b`
   matches the nested tag `#a/b`.
@@ -61,11 +70,39 @@ kinds of notes, in this order:
 
 ![The note that is the page, unfolded in place](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/unfolded-note.png)
 
-Click a note title or line to read the whole note in Roam. Links between notes work inside the viewer.
-If you use Obsidian, click **Open in Obsidian** in the viewer to jump to the note there. To use another
+### Notes look like Roam blocks
+
+A note is drawn as the outline Roam would make of it. Headings, list items and paragraphs are blocks, a
+nested list is nested blocks, and frontmatter properties are attributes. A line that links to the page
+is drawn as in Linked References, and works the same way:
+
+- The path above a line names the headings and list items it sits under. Click a part of the path to open it
+  in place.
+- A line with items nested under it has a caret. Click it to show them.
+- Links, tags, bold, highlights and to-do boxes are drawn as Roam draws them. Whether `[[` `]]` show follows
+  your own Roam setting.
+- Click a link to open that page in Roam, or shift-click to open it in the sidebar. A link to a note that
+  has no page opens the note.
+- A link to a block of a note (`[[Note#^id]]`) shows that block's text, as a block reference does in Roam.
+  A link to a heading reads "Note > Heading". A click on either opens the note at that place.
+- An embedded block or heading (`![[Note#^id]]`, `![[Note#Heading]]`) is drawn in place, as an embed is in
+  Roam. An embedded note (`![[Note]]`) shows its title; click the bar at its left to open it there.
+- Pictures kept in the vault (`![[photo.png]]`, `![alt](photos/photo.png)`) show inline. They are read from
+  the folder on your device.
+- Tables are drawn as Roam's tables, and numbered lists keep their numbers.
+- Properties read as Roam attributes. A date in a property (`created: 2026-11-09`) links to that day, so
+  the day's page in Roam lists the note. A link or a path to a note in a property counts as a link too.
+
+![A line from a nested list, with its path above it and the items under it opened](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/nested-line.png)
+
+Notes exported from Roam as Markdown come out with the same blocks, paths and links they had in Roam.
+
+Click a note title or a line's bullet to open the whole note in Roam's main window, as a page opens. Back
+returns to where you were, and links between notes work inside it. Shift-click opens the note over the page
+instead. If you use Obsidian, click **Open in Obsidian** beside the note's title to jump to the note there. To use another
 editor, see [Opening notes in another editor](#opening-notes-in-another-editor).
 
-![The note viewer, opened from a line, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/note-viewer.png)
+![A note in the main window, opened from a line, with an Open in Obsidian button](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/note-viewer.png)
 
 ### Notes with a similar name
 
@@ -187,7 +224,7 @@ suggested on a page that no note is named after. Only `.md` files are read. If y
 
 ### Opening notes in another editor
 
-The viewer's button opens notes in Obsidian. To open them in another editor instead, fill in **Open notes
+The button beside a note's title opens notes in Obsidian. To open them in another editor instead, fill in **Open notes
 with** in **Settings → Roam Depot → Vaults** with the link your editor uses to open a file. Put `{vault}`
 where the vault folder's name goes and `{file}` where the note's path inside the vault goes. The button then
 reads **Open in editor**. Leave the field empty to go back to Obsidian.
@@ -211,6 +248,8 @@ The setting applies to every vault, so this works when your vaults sit in the sa
 - **Stays on this computer.** The extension makes no network requests. Which folders your vaults are, and
   the index of their notes that makes later starts fast, are kept in the Roam app's storage on this computer.
   They aren't stored in your graph and don't sync to your other devices or to other people in a shared graph.
+  They stay there when the extension is turned off or removed from Roam Depot. To delete them, remove each
+  vault in the settings first.
 - **Folder access you control.** The extension can only read folders you choose. Removing a vault deletes
   its saved folder access and its index.
 - **Who sees the section.** The section is drawn on your screen only. Collaborators on a shared graph don't

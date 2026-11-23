@@ -1,13 +1,55 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (unreleased)
 
+- External Vault References are drawn like Roam's Linked References. A line that links to the page is a
+  Roam block with the headings and list items it sits under as a path above it; click a part of the path
+  to open it in place, and click a line's caret to show the items nested under it. A note unfolded on the
+  page or opened in the viewer is an outline: headings, nested lists and paragraphs are blocks, and
+  frontmatter properties are attributes.
+- Links, tags, aliases, bold, italics, highlights, strikethrough, to-do boxes and attributes are drawn as
+  Roam draws them, including Roam's own `{{[[TODO]]}}`, `^^highlight^^` and `Name::` from a Markdown export.
+  `[[` `]]` show or hide with your own Roam setting.
+- A link opens its page in Roam, shift-click opens it in the sidebar, and ctrl-shift-click opens its
+  linked references there, as in Roam. A link to a note without a page opens the note.
+- A click on a line's text no longer opens the note: the bullet and the note title do, as a bullet and a
+  page title do in Roam. The section folds from its caret.
+- Note titles show their folders in grey before the note's name.
+- A paragraph wrapped over several lines in the file is one block, not one block per line.
+- Obsidian's `%%comments%%` and block ids (`^a1b2c3`) are hidden, as in Obsidian's reading view. Tasks
+  with a custom status (`[/]`, `[-]`, `[?]`, `[!]`) are drawn as ticked boxes, as Obsidian draws them.
+- OKF bundles: a note is found by its frontmatter `title` as well as its file name, a folder's
+  `index.md` is the note for the page named like the folder, and each day of a `log.md` is a reference on
+  that day's daily page. A page called Index or Log no longer lists every folder's `index.md` or `log.md`.
+- A heading that links to the page comes with what is under it, behind its caret.
+- A link to a block of a note (`[[Note#^id]]`) is a Roam block reference: it shows the block's text, and a
+  click opens the note at that block. A link to a heading (`[[Note#Heading]]`, `[text](Note.md#heading)`)
+  reads "Note > Heading" and opens the note at the heading.
+- Embeds are drawn in place, as Roam draws `{{embed}}`. An embedded block or heading (`![[Note#^id]]`,
+  `![[Note#Heading]]`) shows that block with what is under it. An embedded note (`![[Note]]`) shows its
+  title, and the bar at its left opens it, as a page embed does in Roam.
+- Pictures kept in the vault (`![[photo.png]]`, `![[photo.png|300]]`, `![alt](photos/photo.png)`) show
+  inline. They are read from the folder on your device and go nowhere else.
+- Properties read as Roam attributes: YAML's quotes are gone, tags are tags, a list on one line is its
+  values, and a date (`created: 2026-11-09`) is a link to that day. The day's page in Roam lists the note.
+- A property whose value is a path to a note (OKF's `superseded_by`, `sources[].resource`) links to that
+  note, and the note's page lists it.
+- A property that links to the page is drawn as its attribute block (`related:: [[Page]]`).
+- Markdown tables are drawn as Roam's tables, and numbered lists keep their numbers, drawn where Roam
+  draws them for a numbered list.
+- The index is built again by the first scan after this update.
+- Frontmatter `tags` written as one string with commas or spaces (`tags: a, b`) no longer make tags.
+  Obsidian reads tags from a list (`tags: [a, b]`), and Vaults now does the same.
+- A note opens in Roam's main window, drawn as a page: its name as the title and its outline under it. Back
+  and Forward work as they do between pages. Shift-click opens it over the page instead (Roam's sidebar
+  takes no windows from an extension).
 - Notes in a folder named like the page. A vault kept by folder (one folder per project or area, named
   like its page in Roam) showed nothing on those pages unless a note linked back. Now every note inside a
   folder with the page's name, in any letter case and anywhere in the vault, is listed under External
   Vault References like any other note, after the notes that link to the page. The folder's own notes come
-  first, then the notes in its subfolders, and the path above the folder is grey. For a page `A/B`, the folder's path must end in `A/B`. Thanks
-  to Daniel Rahal (@danhrahal) for the idea and the matching.
+  first, then the notes in its subfolders. Its title reads from that folder on, with only the path above
+  the folder in grey. For a page `A/B`, the folder's path must end in `A/B`. Thanks to Daniel Rahal
+  (@danhrahal) for the idea and the matching.
 - Note titles no longer show a hover tooltip.
 
 ## 0.2.0 (2026-11-22)

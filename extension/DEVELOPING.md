@@ -15,10 +15,19 @@ npm test             # engine and parser tests (Node 22+)
 npm run typecheck
 npm run build        # writes dist/extension.js and copies README.md and CHANGELOG.md into dist/
 npm run test:browser # builds, then runs a headless browser smoke test
+node test/help-graph.mjs out/   # after a build: the section next to Roam's own Linked References
 ```
 
+`test/help-graph.mjs` opens Roam's public help graph in a headless browser (the real web app, no sign-in;
+the help graph takes writes in memory only). It writes made-up pages into the graph and the files Roam's
+Markdown export makes of them into a vault, so one page has the same blocks under Linked References and
+under External Vault References. Each vault reference is then compared with Roam's: elements, positions,
+sizes, colours and text, with `[[` `]]` shown and hidden, children opened, each part of a path opened, and
+link clicks. A Roam release that changes Linked References fails this test: copy what changed.
+
 The Tests workflow (`.github/workflows/tests.yml`) runs the type check, unit tests and smoke test on
-GitHub Actions for every pull request and push to main, and fails if `dist/` is out of date.
+GitHub Actions for every pull request and push to main, and fails if `dist/` is out of date. It runs the
+help graph comparison too and keeps its pictures as the `help-graph` artifact.
 
 `./build.sh` is what Roam Depot runs (see [docs/DEPOT-SUBMISSION.md](../docs/DEPOT-SUBMISSION.md)). It
 does a clean `npm ci`, builds, and copies `dist/extension.js` to `extension.js` in this folder, where the
@@ -53,6 +62,13 @@ Roam Depot tab.
   the result comes with the text for the 60 notes a page draws first (`LINES_AT_FIRST`). The rest are
   marked `unread`, and the panel asks for their lines (`lines` in `worker.ts`) just before it draws them
   as the page is scrolled. At 100,000 notes that took a typical page's lookup from 42 ms to 20 ms.
+- Notes are drawn with Roam's own elements and class names, so Roam's stylesheet and the user's theme
+  style them (`ui.ts`: `referenceEl`, `blockEl`, `noteEl`; inline text in `markdown.ts`). `core/outline.ts`
+  reads Markdown as an outline: `contextOf` gives a line's block, the headings and list items above it and
+  the items under it; `outlineOf` gives a whole note. Roam's `renderString` is not used for lines: it shares
+  a budget of 1,500 calls a minute with writes, runs `{{query}}`, embeds and iframes found in file text, and
+  misreads Obsidian syntax. It is used once, for a hidden `[[x]]` that shows whether the user has brackets
+  hidden (`brackets.ts`): Roam leaves the bracket elements out of the page then, and has no setting to read.
 - The index is a SQLite database, one per vault, kept in the Roam app's storage on this computer (see
   [SQLite index](#sqlite-index)). It holds each note with its file's size and modification time, so it is
   also the cache: a scan only reads the files that changed. Removing a vault deletes its database.

@@ -5,8 +5,10 @@ import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
 import { createSettingsPanel, scanProgress, COUNTS_SETTING, type SettingsVault } from './settings.ts';
-import { ATTR, installStyles, renderPanel, renderCounts, drawnRows, h, type Count, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
+import { ATTR, installStyles, renderPanel, renderCounts, drawnRows, h, type Count, notify, removeToast, openViewer, closeViewer, drawNote, type SectionState, type SectionActions, type Where, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult, Backlink } from '../engine.ts';
+import { followBrackets } from './brackets.ts';
+import { putLine, type LineRead } from '../core/outline.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
 import { SQL_DIR, poolName } from '../sql/pool-name.ts';
 import { shareName } from '../share.ts';
@@ -41,6 +43,7 @@ class Vault implements PanelVault {
   /** Another Roam window or tab has this vault open, and this one shows what that one's indexer
    *  has (see share.ts). The scan mark is that window's to keep. */
   follows = false;
+  viewer!: ViewerActions;
 
   constructor(id: string, handle: FileSystemDirectoryHandle) {
     this.id = id; this.handle = handle; this.name = handle.name;
@@ -60,14 +63,17 @@ class Vault implements PanelVault {
     const viewer: ViewerActions = {
       read: (path) => this.call<string>('read', { path }),
       resolve: (target, from) => this.call<string | null>('resolve', { target, from }).catch(() => null),
+      image: (target, from) => this.call<Blob | null>('image', { target, from }).catch(() => null),
       openOutside: (path) => this.openOutside(path),
       openLabel: () => openLabel(openWith()),
+      go: openInRoam,
     };
+    this.viewer = viewer;
     this.act = {
       ...viewer,
       reconnect: () => this.connect(true),
       remove: () => removeVault(this),
-      view: (path, line) => openViewer(path, line, viewer),
+      view: (path, line, side) => { if (side || !showNote(this, path, line)) openViewer(path, line, viewer); },
       lines: (notes) => this.lines(notes),
     };
   }
@@ -154,9 +160,9 @@ class Vault implements PanelVault {
   async lines(notes: Backlink[]) {
     const need = notes.filter((b) => b.unread);
     if (!need.length) return;
-    const texts = await this.call<(string[] | null)[]>('lines', { items: need.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })) });
+    const texts = await this.call<(LineRead[] | null)[]>('lines', { items: need.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })) });
     need.forEach((b, i) => {
-      texts[i]?.forEach((t, j) => { if (b.lines[j]) b.lines[j].text = t; });
+      texts[i]?.forEach((t, j) => { if (b.lines[j]) putLine(b.lines[j], t); });
       delete b.unread;
     });
   }
@@ -355,6 +361,70 @@ function syncAllCounts() {
   });
 }
 
+/** Open the page with this title in Roam: in the main window, or in the right sidebar as its
+ *  outline, its linked references or its graph. False when the graph has no such page (a click must
+ *  not make one). */
+// ---------- a note in Roam's main window ----------
+const NOTE = 'roam-vaults-note';
+interface NoteArgs { vault: string; path: string; line: number | null; n: number }
+let shown = 0;
+/** Roam draws this in its main window in place of a page (ui.mainWindow.openComponent). */
+function NoteView(p: NoteArgs) {
+  return (window as any).React.createElement('div', { ref: (el: HTMLElement | null) => {
+    const key = `${p.vault}\n${p.path}\n${p.line}\n${p.n}`;
+    if (!el || el.dataset.rvKey === key) return;
+    el.dataset.rvKey = key;
+    const v = vaults.find((x) => x.id === p.vault);
+    if (v) drawNote(el, p.path, p.line ?? undefined, v.viewer, v.act.view);
+  } });
+}
+/** Open a note in the main window. It gets a place in the window's history, so Back leaves it and
+ *  Forward comes back to it, as with a page. False where Roam has no such window (then the dialog). */
+function showNote(v: Vault, path: string, line?: number): boolean {
+  const main = window.roamAlphaAPI?.ui?.mainWindow;
+  if (typeof main?.openComponent !== 'function' || !noteRegistered) return false;
+  const args: NoteArgs = { vault: v.id, path, line: line ?? null, n: ++shown };
+  try {
+    history.pushState({ rvNote: args }, '', location.href);
+    main.openComponent(NOTE, args);
+    return true;
+  } catch { return false; }
+}
+let noteRegistered = false;
+/** Leave the note, if the main window shows one: Roam draws the page it is on again. */
+async function closeNote() {
+  const main = window.roamAlphaAPI?.ui?.mainWindow;
+  try { if ((await main.getOpenView?.())?.id === NOTE) await main.closeComponent(); } catch { /* Roam shows what it has */ }
+}
+function onPop(e: PopStateEvent) {
+  const main = window.roamAlphaAPI?.ui?.mainWindow;
+  const args = e.state?.rvNote as NoteArgs | undefined;
+  if (args && vaults.some((v) => v.id === args.vault)) { try { main.openComponent(NOTE, { ...args, n: ++shown }); } catch { /* Roam shows what it has */ } }
+  else closeNote();
+}
+function registerNote(): () => void {
+  const main = window.roamAlphaAPI?.ui?.mainWindow;
+  if (typeof main?.registerComponent !== 'function' || !(window as any).React) return () => {};
+  try { main.registerComponent(NOTE, NoteView); } catch { return () => {}; }
+  noteRegistered = true;
+  window.addEventListener('popstate', onPop);
+  return () => {
+    noteRegistered = false;
+    window.removeEventListener('popstate', onPop);
+    closeNote().then(() => { try { main.unregisterComponent(NOTE); } catch { /* gone with Roam */ } });
+  };
+}
+
+function openInRoam(title: string, where: Where): boolean {
+  const api = window.roamAlphaAPI;
+  let uid: string | undefined;
+  try { uid = api.pull('[:block/uid]', [':node/title', title])?.[':block/uid']; } catch { return false; }
+  if (!uid) return false;
+  if (where === 'main') api.ui.mainWindow.openPage({ page: { uid } });
+  else api.ui.rightSidebar.addWindow({ window: { type: where, 'block-uid': uid } });
+  return true;
+}
+
 let scanning = false, scanAgain = false;
 async function inject() {
   if (!vaults.length) return; // nothing to show, so no work on page changes
@@ -365,7 +435,9 @@ async function inject() {
     for (const refs of refsEls) {
       const parent = refs.parentElement;
       if (!parent) continue;
-      const title = await titleFor(refs);
+      // a page embedded in a block and opened has its own references: they are that page's
+      const embedded = refs.closest('.rm-embed--page')?.querySelector(':scope > h3 .rm-page__title')?.textContent;
+      const title = embedded || await titleFor(refs);
       if (!title) continue;
       let panel = parent.querySelector<HTMLElement>(`:scope > .rv-panel[${ATTR}]`);
       if (panel && panel.dataset.title === title) { syncCounts(refs, panel); continue; }
@@ -392,6 +464,8 @@ let loads = 0; // goes up on every load and unload, so a load still in progress 
 async function onload({ extensionAPI }: { extensionAPI: any }) {
   const load = ++loads;
   cleanups.push(installStyles());
+  cleanups.push(followBrackets());
+  cleanups.push(registerNote());
   settingsAPI = extensionAPI?.settings;
   try { showCounts = settingsAPI?.get?.(COUNTS_SETTING) === true; } catch { showCounts = false; }
   workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));

@@ -397,6 +397,8 @@ async function start(): Scan {
 }
 const NO_SCAN: BuildStats = { notes: 0, files: 0, reread: 0, cached: 0, changed: false, errors: [], ms: 0 };
 
+const IMAGE = /\.(?:png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+const MAX_IMAGE = 25 * 1024 * 1024;
 // What a page can ask of the indexer that has its vault: its own, or another window's.
 const answers: Record<string, (a: any) => Promise<unknown> | unknown> = {
   rescan: () => scan(),
@@ -404,6 +406,13 @@ const answers: Record<string, (a: any) => Promise<unknown> | unknown> = {
   lines: ({ items }) => engine ? engine.lines(items) : (items as unknown[]).map(() => null),
   read: ({ path }) => engine!.read(path),
   resolve: ({ target, from }) => engine?.resolve(target, from) ?? null,
+  // An image of the vault, for a note that shows it. Nothing else is handed out, and nothing huge.
+  async image({ target, from }) {
+    const path = IMAGE.test(target) ? engine?.resolveFile(target, from) : null;
+    if (!path || !IMAGE.test(path)) return null;
+    const f = await getFile(path);
+    return f.size > MAX_IMAGE ? null : new Blob([await f.arrayBuffer()], { type: f.type || 'application/octet-stream' });
+  },
   same: ({ handle }) => root ? root.isSameEntry(handle) : false,
 };
 const commands: Record<string, (a: any) => Promise<unknown> | unknown> = {

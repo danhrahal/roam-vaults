@@ -22,6 +22,9 @@
   `index.md` is the note for the page named like the folder, and each day of a `log.md` is a reference on
   that day's daily page. A page called Index or Log no longer lists every folder's `index.md` or `log.md`.
 - A heading that links to the page comes with what is under it, behind its caret.
+- A link to a block of a note (`[[Note#^id]]`) is a Roam block reference: it shows the block's text, and a
+  click opens the note at that block. A link to a heading (`[[Note#Heading]]`, `[text](Note.md#heading)`)
+  reads "Note > Heading" and opens the note at the heading.
 - The index is built again by the first scan after this update.
 - Frontmatter `tags` written as one string with commas or spaces (`tags: a, b`) no longer make tags.
   Obsidian reads tags from a list (`tags: [a, b]`), and Vaults now does the same.

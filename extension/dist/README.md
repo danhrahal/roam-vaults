@@ -78,6 +78,8 @@ is drawn as in Linked References, and works the same way:
   your own Roam setting.
 - Click a link to open that page in Roam, or shift-click to open it in the sidebar. A link to a note that
   has no page opens the note.
+- A link to a block of a note (`[[Note#^id]]`) shows that block's text, as a block reference does in Roam.
+  A link to a heading reads "Note > Heading". A click on either opens the note at that place.
 
 ![A line from a nested list, with its path above it and the items under it opened](https://raw.githubusercontent.com/sweenzor/roam-vaults/ed6254a358567e360e8625c57a0364c11775dd9b/docs/images/nested-line.png)
 

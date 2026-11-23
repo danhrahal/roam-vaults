@@ -110,9 +110,14 @@ function thing(parent: HTMLElement, s: string, i: number, tok: string, flush: ()
       const inner = s.slice(o + 2, close);
       if (!inner.trim()) return i;
       const [targetPart, alias] = splitPipe(inner);
-      const target = targetPart.replace(/#.*$/, '').trim();
-      if (alias !== null) return put(close + 2, pageAlias(target, (embed ? '📎 ' : '') + alias));
-      return put(close + 2, pageRef(target, (embed ? '📎 ' : '') + targetPart));
+      const hash = targetPart.indexOf('#');
+      const target = (hash < 0 ? targetPart : targetPart.slice(0, hash)).trim();
+      const sub = hash < 0 ? '' : targetPart.slice(hash).trim();
+      if (alias !== null) return put(close + 2, pageAlias(target, (embed ? '📎 ' : '') + alias, sub));
+      if (sub.startsWith('#^')) return put(close + 2, blockRef(target, sub, targetPart));
+      // a link to a heading reads "Note > Heading", as Obsidian shows it
+      const shown = sub ? [target, ...sub.split('#').filter(Boolean)].filter(Boolean).join(' > ') : targetPart;
+      return put(close + 2, pageRef(target, (embed ? '📎 ' : '') + shown, sub));
     }
     // [text](dest), ![alt](dest)
     const mid = closing(s, o + 1, '[', ']');
@@ -139,7 +144,8 @@ function thing(parent: HTMLElement, s: string, i: number, tok: string, flush: ()
       return put(end + 1, a);
     }
     let t = dest; try { t = decodeURIComponent(dest); } catch { /* keep raw */ }
-    return put(end + 1, pageAlias(t.replace(/#.*$/, ''), label || t));
+    const at = t.indexOf('#');
+    return put(end + 1, pageAlias(at < 0 ? t : t.slice(0, at), label || t, at < 0 ? '' : t.slice(at)));
   }
   if (tok === '`') {
     const c = s.indexOf('`', i + 1);
@@ -211,19 +217,29 @@ function closing(s: string, i: number, open: string, close: string): number {
 }
 
 /** [[Page]] as Roam draws it. The brackets are there or not as Roam's own are (see brackets.ts). */
-function pageRef(target: string, shown: string): HTMLElement {
+function pageRef(target: string, shown: string, sub = ''): HTMLElement {
   const wrap = el('span');
   wrap.dataset.linkTitle = target;
   const a = el('span', 'rm-page-ref rm-page-ref--link');
   a.dataset.rvTarget = target;
+  if (sub) a.dataset.rvSub = sub; // the heading the link names
   if (shown.includes('[[')) spans(a, shown); else a.textContent = shown; // a title with links in it
   wrap.append(el('span', 'rm-page-ref__brackets', '[['), a, el('span', 'rm-page-ref__brackets', ']]'));
   return wrap;
 }
+/** A link to a block of a note, [[Note#^id]]: Roam's block reference, which shows the block's text.
+ *  The text is put in by whoever draws the block (`data-rv-fill`); until then it is the link as written. */
+function blockRef(target: string, sub: string, written: string): HTMLElement {
+  const ref = el('span', 'rm-block-ref dont-focus-block');
+  ref.dataset.rvTarget = target; ref.dataset.rvSub = sub; ref.dataset.rvFill = '';
+  ref.append(el('span', '', written));
+  return ref;
+}
 /** A link with text of its own: Obsidian's [[Page|text]], Roam's [text]([[Page]]). */
-function pageAlias(target: string, shown: string): HTMLElement {
+function pageAlias(target: string, shown: string, sub = ''): HTMLElement {
   const a = el('a', 'rm-alias rm-alias--page');
   a.dataset.rvTarget = target;
+  if (sub) a.dataset.rvSub = sub;
   spans(a, shown);
   return a;
 }

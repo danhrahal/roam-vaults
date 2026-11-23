@@ -185,9 +185,13 @@ function thing(parent, s, i, tok, flush) {
       const inner = s.slice(o + 2, close);
       if (!inner.trim()) return i;
       const [targetPart, alias] = splitPipe(inner);
-      const target = targetPart.replace(/#.*$/, "").trim();
-      if (alias !== null) return put(close + 2, pageAlias(target, (embed ? "\u{1F4CE} " : "") + alias));
-      return put(close + 2, pageRef(target, (embed ? "\u{1F4CE} " : "") + targetPart));
+      const hash = targetPart.indexOf("#");
+      const target = (hash < 0 ? targetPart : targetPart.slice(0, hash)).trim();
+      const sub = hash < 0 ? "" : targetPart.slice(hash).trim();
+      if (alias !== null) return put(close + 2, pageAlias(target, (embed ? "\u{1F4CE} " : "") + alias, sub));
+      if (sub.startsWith("#^")) return put(close + 2, blockRef(target, sub, targetPart));
+      const shown = sub ? [target, ...sub.split("#").filter(Boolean)].filter(Boolean).join(" > ") : targetPart;
+      return put(close + 2, pageRef(target, (embed ? "\u{1F4CE} " : "") + shown, sub));
     }
     const mid = closing(s, o + 1, "[", "]");
     if (mid < 0 || s[mid + 1] !== "(") return i;
@@ -219,7 +223,8 @@ function thing(parent, s, i, tok, flush) {
       t = decodeURIComponent(dest);
     } catch {
     }
-    return put(end + 1, pageAlias(t.replace(/#.*$/, ""), label || t));
+    const at = t.indexOf("#");
+    return put(end + 1, pageAlias(at < 0 ? t : t.slice(0, at), label || t, at < 0 ? "" : t.slice(at)));
   }
   if (tok === "`") {
     const c = s.indexOf("`", i + 1);
@@ -293,19 +298,29 @@ function closing(s, i, open4, close) {
   }
   return -1;
 }
-function pageRef(target, shown) {
+function pageRef(target, shown, sub = "") {
   const wrap = el("span");
   wrap.dataset.linkTitle = target;
   const a = el("span", "rm-page-ref rm-page-ref--link");
   a.dataset.rvTarget = target;
+  if (sub) a.dataset.rvSub = sub;
   if (shown.includes("[[")) spans(a, shown);
   else a.textContent = shown;
   wrap.append(el("span", "rm-page-ref__brackets", "[["), a, el("span", "rm-page-ref__brackets", "]]"));
   return wrap;
 }
-function pageAlias(target, shown) {
+function blockRef(target, sub, written) {
+  const ref = el("span", "rm-block-ref dont-focus-block");
+  ref.dataset.rvTarget = target;
+  ref.dataset.rvSub = sub;
+  ref.dataset.rvFill = "";
+  ref.append(el("span", "", written));
+  return ref;
+}
+function pageAlias(target, shown, sub = "") {
   const a = el("a", "rm-alias rm-alias--page");
   a.dataset.rvTarget = target;
+  if (sub) a.dataset.rvSub = sub;
   spans(a, shown);
   return a;
 }
@@ -604,6 +619,29 @@ function putLine(l, t) {
   l.kids = t.kids;
   if (t.cut) l.cut = true;
   else delete l.cut;
+}
+var headKey = (t) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function lineOfSub(text, sub) {
+  const part = sub.slice(sub.lastIndexOf("#") + 1).trim();
+  if (!part) return void 0;
+  const lines = text.split("\n");
+  if (part[0] === "^") {
+    const id = part.slice(1);
+    const re = new RegExp(`(?:^|[ \\t])\\^${id.replace(/[^A-Za-z0-9-]/g, "")}[ \\t]*\\r?$`);
+    for (let i = 0; i < lines.length; i++) {
+      if (!re.test(lines[i])) continue;
+      if (lines[i].trim() !== "^" + id) return i;
+      for (let k = i - 1; k >= 0; k--) if (lines[k].trim()) return k;
+      return i;
+    }
+    return void 0;
+  }
+  const want = headKey(part);
+  for (let i = 0; i < lines.length; i++) {
+    const m = RE_HEADING.exec(lines[i].replace(/\r$/, ""));
+    if (m && headKey(m[2]) === want) return i;
+  }
+  return void 0;
 }
 
 // src/main/ui.ts
@@ -910,7 +948,7 @@ function marked(text, from, marks) {
 }
 function referenceEl(block, path, act) {
   const inner = h("div", {});
-  const ctx = { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act) };
+  const ctx = { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act), refs: (el2) => fillRefs(el2, path, act) };
   const show = (up, shown, mark) => {
     const zoom = h("div", { class: "rm-zoom zoom-mentions-view" }, ...up.map((u, i) => {
       const text = h("span", {});
@@ -948,9 +986,28 @@ function referenceEl(block, path, act) {
   show(block.up, block);
   return h("div", { class: "flex-h-box flex-align-start" }, h("div", { class: "rm-reference-item dont-focus-block" }, inner));
 }
+function fillRefs(el2, from, act) {
+  el2.querySelectorAll("[data-rv-fill]").forEach(async (ref) => {
+    delete ref.dataset.rvFill;
+    try {
+      const target = ref.dataset.rvTarget;
+      const to = target ? await act.resolve(target, from) : from;
+      if (!to) return;
+      const text = await act.read(to);
+      const line = lineOfSub(text, ref.dataset.rvSub);
+      if (line === void 0) return;
+      const span = document.createElement("span");
+      inline(span, contextOf(text, [line])[0].text.split("\n")[0]);
+      span.querySelectorAll("[data-rv-fill]").forEach((r) => delete r.dataset.rvFill);
+      ref.replaceChildren(span);
+    } catch {
+    }
+  });
+}
 function blockEl(b, level, ctx) {
   const text = h("span", {});
   const heading = blockBody(text, b.text);
+  ctx.refs(text);
   const has = b.kids.length > 0 || !!b.cut;
   let open4 = has && !b.cut && (!!ctx.unfolded || ctx.mark !== void 0 && holds(b, ctx.mark));
   const kidsBox = h("div", { class: `rm-block-children rm-block__children rm-level-${level + 1}` });
@@ -1033,11 +1090,21 @@ function linkClick(e, from, act, noteFirst = false) {
   const target = a.dataset.rvTarget, where = whereOf(e);
   const name = target.slice(target.lastIndexOf("/") + 1).replace(/\.md$/i, "");
   const page = () => act.go(target, where) || name !== target && act.go(name, where);
-  const note = () => act.resolve(target, from).then((to) => {
-    if (to) act.view(to);
-    return !!to;
-  }, () => false);
-  if (noteFirst) note().then((found) => {
+  const sub = a.dataset.rvSub;
+  const note = async () => {
+    try {
+      const to = target ? await act.resolve(target, from) : from;
+      if (!to) return false;
+      act.view(to, sub ? lineOfSub(await act.read(to), sub) : void 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (sub || !target) note().then((found) => {
+    if (!found && !(target && page())) a.classList.add("rv-missing");
+  });
+  else if (noteFirst) note().then((found) => {
     if (!found && !page()) a.classList.add("rv-missing");
   });
   else if (!page()) note();
@@ -1045,7 +1112,7 @@ function linkClick(e, from, act, noteFirst = false) {
 }
 async function loadPreview(el2, path, act) {
   try {
-    el2.replaceChildren(noteEl(await act.read(path), { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act) }));
+    el2.replaceChildren(noteEl(await act.read(path), { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act), refs: (el3) => fillRefs(el3, path, act) }));
   } catch (e) {
     el2.replaceChildren(`Couldn't read this note: ${e.message}`);
   }
@@ -1089,14 +1156,14 @@ async function openViewer(path, line, act) {
   document.addEventListener("keydown", onKey, true);
   try {
     const text = await act.read(path);
-    const links = { resolve: act.resolve, view: (to) => {
-      openViewer(to, void 0, act);
+    const links = { resolve: act.resolve, read: act.read, view: (to, at) => {
+      openViewer(to, at, act);
     }, go: (title2, where) => {
       const ok = act.go(title2, where);
       if (ok && where === "main") closeViewer();
       return ok;
     } };
-    body.replaceChildren(noteEl(text, { read: () => act.read(path), link: (e) => linkClick(e, path, links, true) }, line));
+    body.replaceChildren(noteEl(text, { read: () => act.read(path), link: (e) => linkClick(e, path, links, true), refs: (el2) => fillRefs(el2, path, act) }, line));
   } catch (e) {
     body.replaceChildren(`Couldn't read this note: ${e.message}`);
   }

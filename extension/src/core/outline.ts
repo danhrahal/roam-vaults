@@ -305,3 +305,31 @@ export function putLine(l: ReadLine, t: LineRead) {
   l.text = t.text; l.at = t.line; l.up = t.up; l.kids = t.kids;
   if (t.cut) l.cut = true; else delete l.cut;
 }
+
+const headKey = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/** The line a link's subpath names in a note: "#Heading" (the last of "#H1#H2") a heading with that
+ *  text, "#^id" the block that ends in " ^id" or, where the id is on a line of its own, the block
+ *  above it. Undefined when the note has no such heading or block. */
+export function lineOfSub(text: string, sub: string): number | undefined {
+  const part = sub.slice(sub.lastIndexOf('#') + 1).trim();
+  if (!part) return undefined;
+  const lines = text.split('\n');
+  if (part[0] === '^') {
+    const id = part.slice(1);
+    const re = new RegExp(`(?:^|[ \\t])\\^${id.replace(/[^A-Za-z0-9-]/g, '')}[ \\t]*\\r?$`);
+    for (let i = 0; i < lines.length; i++) {
+      if (!re.test(lines[i])) continue;
+      if (lines[i].trim() !== '^' + id) return i;
+      for (let k = i - 1; k >= 0; k--) if (lines[k].trim()) return k;
+      return i;
+    }
+    return undefined;
+  }
+  const want = headKey(part);
+  for (let i = 0; i < lines.length; i++) {
+    const m = RE_HEADING.exec(lines[i].replace(/\r$/, ''));
+    if (m && headKey(m[2]) === want) return i;
+  }
+  return undefined;
+}

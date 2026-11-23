@@ -2,7 +2,7 @@
 // Plain DOM with Blueprint 3 class names (Roam ships Blueprint), so no bundled UI library.
 import type { PageResult, Backlink } from '../engine.ts';
 import { blockBody, inline } from './markdown.ts';
-import { contextOf, kidsAt, outlineOf, type OutlineBlock, type LineContext } from '../core/outline.ts';
+import { contextOf, kidsAt, lineOfSub, outlineOf, type OutlineBlock, type LineContext } from '../core/outline.ts';
 
 export const ATTR = 'data-roam-vaults';
 
@@ -327,7 +327,7 @@ function marked(text: string, from: number, marks: number[]): (string | HTMLElem
  *  path shows that block in its place, with everything under it, as in Roam. */
 function referenceEl(block: LineContext, path: string, act: SectionActions): HTMLElement {
   const inner = h('div', {});
-  const ctx: BlockCtx = { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act) };
+  const ctx: BlockCtx = { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act), refs: (el) => fillRefs(el, path, act) };
   /** `shown`: the block to draw, under the parents still shown as a path. */
   const show = (up: LineContext['up'], shown: OutlineBlock, mark?: number) => {
     const zoom = h('div', { class: 'rm-zoom zoom-mentions-view' }, ...up.map((u, i) => {
@@ -361,6 +361,25 @@ function referenceEl(block: LineContext, path: string, act: SectionActions): HTM
 }
 
 /** What a drawn block needs of the note it is from. */
+/** Put the text of the blocks they name into the block references drawn in `el` ([[Note#^id]]). */
+function fillRefs(el: HTMLElement, from: string, act: Pick<SectionActions, 'resolve' | 'read'>) {
+  el.querySelectorAll<HTMLElement>('[data-rv-fill]').forEach(async (ref) => {
+    delete ref.dataset.rvFill;
+    try {
+      const target = ref.dataset.rvTarget!;
+      const to = target ? await act.resolve(target, from) : from;
+      if (!to) return;
+      const text = await act.read(to);
+      const line = lineOfSub(text, ref.dataset.rvSub!);
+      if (line === undefined) return;
+      const span = document.createElement('span');
+      inline(span, contextOf(text, [line])[0].text.split('\n')[0]);
+      span.querySelectorAll('[data-rv-fill]').forEach((r) => delete (r as HTMLElement).dataset.rvFill); // a reference in a reference stays as written
+      ref.replaceChildren(span);
+    } catch { /* stays as written */ }
+  });
+}
+
 interface BlockCtx {
   /** The note's text, for children that did not come with the block. */
   read(): Promise<string>;
@@ -368,6 +387,8 @@ interface BlockCtx {
   open?(line: number): void;
   /** A click in the block's text: follow the link it landed on, if any. */
   link(e: MouseEvent): boolean;
+  /** Fill the block references in a block's text in. */
+  refs(el: HTMLElement): void;
   /** Blocks with children show them from the start (a note shown whole), not when asked. */
   unfolded?: boolean;
   /** The line to mark: its block is highlighted, and the blocks above it show their children. */
@@ -379,6 +400,7 @@ interface BlockCtx {
 function blockEl(b: OutlineBlock, level: number, ctx: BlockCtx): HTMLElement {
   const text = h('span', {});
   const heading = blockBody(text, b.text);
+  ctx.refs(text);
   const has = b.kids.length > 0 || !!b.cut;
   // In Roam's Linked References a reference's children show when asked for; a note shown whole is open.
   let open = has && !b.cut && (!!ctx.unfolded || (ctx.mark !== undefined && holds(b, ctx.mark)));
@@ -431,7 +453,7 @@ function noteEl(text: string, ctx: BlockCtx, mark?: number): DocumentFragment {
  *  Roam, where Roam would open it for that click; when the graph has no such page, the note it names
  *  opens in the viewer. In the viewer (`noteFirst`) it is the note first, then the page. Returns
  *  whether the click was on a link. */
-function linkClick(e: MouseEvent, from: string, act: Pick<SectionActions, 'go' | 'resolve'> & { view(path: string): void }, noteFirst = false): boolean {
+function linkClick(e: MouseEvent, from: string, act: Pick<SectionActions, 'go' | 'resolve' | 'read'> & { view(path: string, line?: number): void }, noteFirst = false): boolean {
   const t = e.target as Element;
   if (t.closest?.('a[href]')) { e.stopPropagation(); return true; } // a web link: the browser opens it
   const a = t.closest?.<HTMLElement>('[data-rv-target]');
@@ -440,15 +462,25 @@ function linkClick(e: MouseEvent, from: string, act: Pick<SectionActions, 'go' |
   const target = a.dataset.rvTarget!, where = whereOf(e);
   const name = target.slice(target.lastIndexOf('/') + 1).replace(/\.md$/i, '');
   const page = () => act.go(target, where) || (name !== target && act.go(name, where));
-  const note = () => act.resolve(target, from).then((to) => { if (to) act.view(to); return !!to; }, () => false);
-  if (noteFirst) note().then((found) => { if (!found && !page()) a.classList.add('rv-missing'); });
+  const sub = a.dataset.rvSub;
+  const note = async () => {
+    try {
+      const to = target ? await act.resolve(target, from) : from;
+      if (!to) return false;
+      act.view(to, sub ? lineOfSub(await act.read(to), sub) : undefined);
+      return true;
+    } catch { return false; }
+  };
+  // a heading or a block of a note: Roam's pages have neither, so it is the note that opens, there
+  if (sub || !target) note().then((found) => { if (!found && !(target && page())) a.classList.add('rv-missing'); });
+  else if (noteFirst) note().then((found) => { if (!found && !page()) a.classList.add('rv-missing'); });
   else if (!page()) note();
   return true;
 }
 
 async function loadPreview(el: HTMLElement, path: string, act: SectionActions) {
   try {
-    el.replaceChildren(noteEl(await act.read(path), { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act) }));
+    el.replaceChildren(noteEl(await act.read(path), { read: () => act.read(path), open: (line) => act.view(path, line), link: (e) => linkClick(e, path, act), refs: (el) => fillRefs(el, path, act) }));
   } catch (e) {
     el.replaceChildren(`Couldn't read this note: ${(e as Error).message}`);
   }
@@ -484,8 +516,8 @@ export async function openViewer(path: string, line: number | undefined, act: Vi
   document.addEventListener('keydown', onKey, true);
   try {
     const text = await act.read(path);
-    const links = { resolve: act.resolve, view: (to: string) => { openViewer(to, undefined, act); }, go: (title: string, where: Where) => { const ok = act.go(title, where); if (ok && where === 'main') closeViewer(); return ok; } };
-    body.replaceChildren(noteEl(text, { read: () => act.read(path), link: (e) => linkClick(e, path, links, true) }, line));
+    const links = { resolve: act.resolve, read: act.read, view: (to: string, at?: number) => { openViewer(to, at, act); }, go: (title: string, where: Where) => { const ok = act.go(title, where); if (ok && where === 'main') closeViewer(); return ok; } };
+    body.replaceChildren(noteEl(text, { read: () => act.read(path), link: (e) => linkClick(e, path, links, true), refs: (el) => fillRefs(el, path, act) }, line));
   } catch (e) {
     body.replaceChildren(`Couldn't read this note: ${(e as Error).message}`);
   }

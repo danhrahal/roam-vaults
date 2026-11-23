@@ -51,7 +51,10 @@ test('page links, aliases and tags are Roam\'s elements, from Roam\'s spelling a
   assert.deepEqual(parts('see [[Dark rye]] now'), ['see ', ref('Dark rye'), ' now']);
   assert.deepEqual(parts('[Rye]([[Dark rye]])'), ['<a.rm-alias.rm-alias--page{Dark rye}:Rye>']);
   assert.deepEqual(parts('[[Dark rye|Rye]]'), ['<a.rm-alias.rm-alias--page{Dark rye}:Rye>']);
-  assert.deepEqual(parts('[[Dark rye#Proof]]'), [ref('Dark rye', 'Dark rye#Proof')]);
+  assert.deepEqual(parts('[[Dark rye#Proof]]'), [ref('Dark rye', 'Dark rye > Proof')]);
+  assert.deepEqual(parts('[[Dark rye#Method#Proof]]'), [ref('Dark rye', 'Dark rye > Method > Proof')]);
+  assert.deepEqual(parts('[[#Proof]]'), [ref('', 'Proof')]);
+  assert.deepEqual(parts('[[Dark rye#^fold]]'), ['<span.rm-block-ref.dont-focus-block{Dark rye}:(<span:Dark rye#^fold>)>']);
   assert.deepEqual(parts('[note](Folder/Dark%20rye.md)'), ['<a.rm-alias.rm-alias--page{Folder/Dark rye.md}:note>']);
   assert.deepEqual(parts('#wholesale and #[[two words]] and #a/b'), ['<span.rm-page-ref.rm-page-ref--tag{wholesale}:#wholesale>', ' and ', '<span.rm-page-ref.rm-page-ref--tag{two words}:#two words>', ' and ', '<span.rm-page-ref.rm-page-ref--tag{a/b}:#a/b>']);
   assert.deepEqual(parts('issue #12 and a#b'), ['issue #12 and a#b']);
@@ -93,4 +96,13 @@ test('what Obsidian hides or ticks is hidden or ticked: comments, block ids, any
   for (const s of ['x', '/', '-', '?', '!']) assert.equal(String(body(`[${s}] order flour`)[1]).startsWith('span.rm-checkbox rm-done'), true, s);
   assert.equal(String(body('[ ] order flour')[1]).startsWith('span.rm-checkbox rm-todo'), true);
   assert.deepEqual(body('[1] Smith 2020'), [0, '[1] Smith 2020']);
+});
+
+test('a link keeps the heading or block it names, for the click', () => {
+  const root = new El('div');
+  inline(root as unknown as HTMLElement, '[[Dark rye#Proof]] [[Dark rye#^fold|the fold]] [m](Dark%20rye.md#Proof) [[Dark rye]]');
+  const subs: (string | undefined)[] = [];
+  const walk = (k: El | string) => { if (typeof k === 'string') return; if (k.dataset.rvTarget !== undefined) subs.push(k.dataset.rvSub); k.kids.forEach(walk); };
+  root.kids.forEach(walk);
+  assert.deepEqual(subs, ['#Proof', '#^fold', '#Proof', undefined]);
 });

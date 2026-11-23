@@ -43,7 +43,12 @@ export const PAGES = {
 /** A page as Roam's Markdown export writes it: "- " blocks, four spaces a level. */
 export const exported = (blocks, depth = 0) => blocks.map(([text, kids = []]) => `${'    '.repeat(depth)}- ${text}\n${exported(kids, depth + 1)}`).join('');
 // The vault: the export of those pages, the daily note filed by year as in a vault kept by hand.
-const FILES = { 'Wholesale.md': exported(PAGES.Wholesale), 'Days/2026/July 9th, 2026.md': exported(PAGES['July 9th, 2026']), 'Sourdough.md': exported(PAGES[PAGE]) };
+// A block that names another block: Roam's ((uid)), Obsidian's [[Note#^id]]. And a link to a heading.
+const COLD = 'Cold proof: **18 hours** at 4°';
+const FILES = {
+  'Proofing.md': `# Proofing\n\n## Warm\n\n- two hours at 26°\n\n## Cold\n\n- ${COLD} ^cold\n`,
+  'Rota.md': '- [[Focaccia]] goes in after ((the cold proof))\n- [[Focaccia]] timing: see [[Proofing#Cold]]\n'.replace('((the cold proof))', '[[Proofing#^cold]]'),
+  'Wholesale.md': exported(PAGES.Wholesale), 'Days/2026/July 9th, 2026.md': exported(PAGES['July 9th, 2026']), 'Sourdough.md': exported(PAGES[PAGE]) };
 
 const browser = await chromium.launch({ env: { ...process.env, LC_ALL: 'C.UTF-8' } });
 const page = await (await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2 })).newPage();
@@ -55,7 +60,7 @@ await page.waitForTimeout(3000);
 await page.addStyleTag({ content: '.bp3-portal .bp3-toast-container{display:none!important}' }); // the help graph's own warning
 
 // the pages, in the graph's memory
-await page.evaluate(async (PAGES) => {
+await page.evaluate(async ({ PAGES, COLD }) => {
   const api = window.roamAlphaAPI;
   let n = 0;
   const add = async (parent, blocks) => {
@@ -71,7 +76,11 @@ await page.evaluate(async (PAGES) => {
     try { await api.createPage({ page: { title, uid } }); } catch (e) { if (!api.pull('[:block/uid]', [':node/title', title])) throw new Error(`page ${title}: ${e?.message ?? e}`); }
     await add(api.pull('[:block/uid]', [':node/title', title])[':block/uid'], blocks);
   }
-}, PAGES);
+  await api.createPage({ page: { title: 'Proofing', uid: 'rvhgproof' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgproof', order: 0 }, block: { string: COLD, uid: 'rvhgcold1' } });
+  await api.createPage({ page: { title: 'Rota', uid: 'rvhgrota1' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgrota1', order: 0 }, block: { string: '[[Focaccia]] goes in after ((rvhgcold1))', uid: 'rvhgrota2' } });
+}, { PAGES, COLD });
 
 // the vault, in the browser's private file system, connected through the folder picker (stubbed)
 await page.evaluate(async ({ FILES, code }) => {
@@ -113,7 +122,7 @@ const measure = () => page.evaluate(() => {
   const ITEM = {
     crumbs: '.rm-zoom', crumb: '.rm-zoom-item-content', chevron: '.rm-mention-icon', controls: '.rm-block__controls', caret: '.block-expand .rm-caret', bullet: '.rm-bullet__inner',
     text: '.rm-block-text', link: '.rm-block-text .rm-page-ref--link', bracket: '.rm-block-text .rm-page-ref__brackets', tag: '.rm-page-ref--tag', alias: '.rm-alias', bold: '.rm-bold', italic: '.rm-italics',
-    highlight: '.rm-highlight', attr: '.rm-attr-ref', checkbox: '.checkmark', kids: '.rm-block-children', multibar: '.rm-multibar',
+    highlight: '.rm-highlight', blockref: '.rm-block-ref', attr: '.rm-attr-ref', checkbox: '.checkmark', kids: '.rm-block-children', multibar: '.rm-multibar',
   };
   const STYLE = ['color', 'backgroundColor', 'fontSize', 'lineHeight', 'fontWeight', 'fontStyle', 'opacity', 'marginTop', 'marginLeft', 'paddingTop', 'paddingLeft', 'borderTopColor', 'borderTopWidth'];
   const r1 = (n) => Math.round(n * 10) / 10;
@@ -244,6 +253,29 @@ await page.locator('.rv-panel .rm-reference-item', { hasText: 'trial bake' }).lo
 await page.waitForSelector('.rv-viewer .roam-block-container');
 check('a click on a bullet opens the note with that block marked', (await page.locator('.rv-viewer .block-highlight-yellow .rm-block-text').innerText()).includes('trial bake'));
 await page.screenshot({ path: path.join(OUT, '7-note-opened.png') });
+await page.keyboard.press('Escape');
+
+// ---------- a block that names another block, and a link to a heading ----------
+await open('Focaccia');
+await page.waitForSelector('.rv-panel .rm-reference-item');
+await page.waitForFunction((t) => document.querySelector('.rv-panel .rm-block-ref')?.textContent === t, COLD.replaceAll('*', ''));
+await page.waitForTimeout(500);
+await shot('8-block-reference.png');
+{
+  const m = await measure();
+  const only = (g) => ({ Rota: g.Rota && { ...g.Rota, parts: { caret: g.Rota.parts.caret, title: g.Rota.parts.title }, height: 0, items: Object.fromEntries(Object.entries(g.Rota.items).filter(([t]) => t.includes('goes in after'))) } });
+  compare({ ...m, roam: only(m.roam), vault: only(m.vault) }, 'block reference');
+}
+await page.locator('.rv-panel .rm-block-ref').click();
+await page.waitForSelector('.rv-viewer .roam-block-container');
+check('a click on a block reference opens the note with that block marked', (await page.locator('.rv-viewer .block-highlight-yellow .rm-block-text').first().innerText()) === COLD.replaceAll('*', ''));
+await page.keyboard.press('Escape');
+const head = page.locator('.rv-panel .rm-page-ref--link', { hasText: 'Proofing > Cold' });
+check('a link to a heading reads "Note > Heading"', await head.count() === 1);
+await head.click();
+await page.waitForSelector('.rv-viewer .roam-block-container');
+check('and opens the note with the heading marked', (await page.locator('.rv-viewer .block-highlight-yellow .rm-block-text').first().innerText()) === 'Cold');
+await page.screenshot({ path: path.join(OUT, '9-heading-opened.png') });
 await page.keyboard.press('Escape');
 fs.writeFileSync(path.join(OUT, 'measured.json'), JSON.stringify(await measure(), null, 1));
 

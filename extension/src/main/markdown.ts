@@ -26,6 +26,7 @@ export function blockBody(parent: HTMLElement, text: string): number {
     return 0;
   }
   if (/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(text)) { parent.append(el('hr', 'rm-hr')); return 0; }
+  if (text[0] === '|' && tableOf(parent, text)) return 0;
   if (!/(^|\n)[ \t]*(```|~~~)/.test(text)) { inline(parent, text); return 0; }
   // text with fenced code in it: the text as text, the code as code
   const lines = text.split('\n');
@@ -43,6 +44,43 @@ export function blockBody(parent: HTMLElement, text: string): number {
   }
   flush();
   return 0;
+}
+
+/** The cells of a row of a Markdown table. A pipe after a backslash is in a cell, not between two. */
+function cells(line: string): string[] {
+  const out: string[] = [];
+  let cell = '';
+  const s = line.trim().replace(/^\|/, '').replace(/\|$/, (m, at: number, all: string) => (all[at - 1] === '\\' ? m : ''));
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && s[i + 1] === '|') { cell += '|'; i++; }
+    else if (s[i] === '|') { out.push(cell.trim()); cell = ''; }
+    else cell += s[i];
+  }
+  out.push(cell.trim());
+  return out;
+}
+/** A Markdown table as Roam's {{table}} (measured in Roam, 2026-11-23): rows of cells 150 wide, the
+ *  first row like the others. False when the text is no table. */
+function tableOf(parent: HTMLElement, text: string): boolean {
+  const lines = text.split('\n');
+  if (lines.length < 2 || !/^\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/.test(lines[1]) || !lines[1].includes('-')) return false;
+  const rows = [lines[0], ...lines.slice(2)].filter((l) => l.trim()).map(cells);
+  const width = Math.max(...rows.map((r) => r.length));
+  const body = el('tbody');
+  rows.forEach((row, y) => {
+    const tr = el('tr');
+    for (let x = 0; x < width; x++) {
+      const td = el('td'), cell = el('div', 'rm-table__cell'), sp = el('span');
+      td.dataset.row = String(y); td.dataset.col = String(x);
+      td.style.minWidth = td.style.maxWidth = '150px';
+      inline(sp, row[x] ?? '');
+      cell.append(sp); td.append(cell); tr.append(td);
+    }
+    body.append(tr);
+  });
+  const table = el('table'), box = el('div', 'rm-table hoverparent dont-focus-block nodrag'), wrap = el('span', 'dont-focus-block');
+  table.append(body); box.append(table); wrap.append(box); parent.append(wrap);
+  return true;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: string) => {

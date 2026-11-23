@@ -473,14 +473,16 @@ function blockEl(b: OutlineBlock, level: number, ctx: BlockCtx): HTMLElement {
   let open = has && !b.cut && (!!ctx.unfolded || (ctx.mark !== undefined && holds(b, ctx.mark)));
   const kidsBox = h('div', { class: `rm-block-children rm-block__children rm-level-${level + 1}` });
   const c = h('span', { class: `bp3-icon-standard bp3-icon-caret-down rm-caret rm-caret-hidden${has ? ' rv-kids-caret' : ''}` });
-  const bullet = h('span', { class: 'rm-bullet', onclick: () => ctx.open?.(b.line) },
-    h('span', { class: 'bp3-popover-wrapper' }, h('span', { class: 'bp3-popover-target' }, h('span', { class: 'rm-bullet__inner' })))); // Roam's wrappers: they set the line the dot sits on
+  // an item of a numbered list has its number for a bullet, as the children of a block viewed as numbered have in Roam
+  const bullet = h('span', { class: b.n === undefined ? 'rm-bullet' : `rm-bullet rm-bullet--numbered rm-bullet--numbered-${b.n < 10 ? 'single' : 'double'}-digit`, onclick: () => ctx.open?.(b.line) },
+    h('span', { class: 'bp3-popover-wrapper' }, h('span', { class: 'bp3-popover-target' }, // Roam's wrappers: they set the line the dot sits on
+      b.n === undefined ? h('span', { class: 'rm-bullet__inner' }) : h('span', { class: 'rm-bullet__inner--numbered' }, `${b.n}.`))));
   const box = h('div', { class: 'roam-block-container rm-block rm-not-focused block-bullet-view' + (heading ? ` rm-heading-level-${Math.min(heading, 3)}` : '')
     + (b.line === ctx.mark ? ' block-highlight-yellow rv-hl' : '') }, // Roam's own mark for the block a path was opened from
     h('div', { class: 'rm-block-main rm-block__self' },
       h('div', { class: 'controls rm-block__controls noselect' }, h('span', { class: 'block-expand' }, c), bullet),
       // A click on the text follows a link under it and nothing else: in Roam it would edit the block.
-      h('div', { class: 'rm-block__input rm-block__input--view roam-block dont-unfocus-block hoverparent rm-block-text', onclick: (e: MouseEvent) => { ctx.link(e); } }, text),
+      h('div', { class: 'rm-block__input rm-block__input--view roam-block dont-unfocus-block hoverparent' + (text.querySelector('.rm-table') ? '' : ' rm-block-text'), onclick: (e: MouseEvent) => { ctx.link(e); } }, text),
       h('div', { class: 'rm-block-separator' }),
       h('div', { style: 'min-width: 24px;' })),
     kidsBox);

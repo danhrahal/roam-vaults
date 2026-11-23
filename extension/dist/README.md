@@ -84,6 +84,7 @@ is drawn as in Linked References, and works the same way:
   Roam. An embedded note (`![[Note]]`) shows its title; click the bar at its left to open it there.
 - Pictures kept in the vault (`![[photo.png]]`, `![alt](photos/photo.png)`) show inline. They are read from
   the folder on your device.
+- Tables are drawn as Roam's tables, and numbered lists keep their numbers.
 - Properties read as Roam attributes. A date in a property (`created: 2026-11-09`) links to that day, so
   the day's page in Roam lists the note. A link or a path to a note in a property counts as a link too.
 

@@ -156,3 +156,12 @@ test('properties are attributes as Roam would hold them: no quotes, tags, dates 
   assert.deepEqual([src.text, src.up], ['resource: [notes/flour.md](notes/flour.md)', [{ text: 'sources::', line: 6 }]]);
   assert.equal(body.text, 'Body.');
 });
+
+test('items of a numbered list carry their numbers, counted as Markdown counts them', () => {
+  const nums = (b: any): any => (b.kids.length ? [b.n ?? '-', b.kids.map(nums)] : b.n ?? '-');
+  const note = ['Steps', '', '1. Mix', '1. Fold', '    - gently', '    3. twice', '    3. thrice', '7) Bake', '- Cool', '4. Eat', '', '^steps'].join('\n');
+  assert.deepEqual(outlineOf(note).map(nums), ['-', 1, [2, ['-', 3, 4]], 3, '-', 4]);
+  assert.deepEqual(kidsAt(note, 3).map((k) => k.n), [undefined, 3, 4]);
+  assert.deepEqual(contextOf(note, [3])[0].kids.map((k) => k.n), [undefined, 3, 4]);
+  assert.equal(outlineOf(note).some((b) => b.text.includes('^steps')), false); // a line that is only an id is no block
+});

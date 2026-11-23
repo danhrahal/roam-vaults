@@ -12,6 +12,9 @@ export interface OutlineBlock {
   line: number;
   /** Blocks nested under it. */
   kids: OutlineBlock[];
+  /** Its number, for an item of a numbered list: drawn in place of the bullet, as Roam draws the
+   *  children of a block viewed as numbered. */
+  n?: number;
   /** It has blocks under it that were left out (see MAX_KIDS). */
   cut?: true;
 }
@@ -25,7 +28,7 @@ export const MAX_KIDS = 200;
 /** Characters of one block that are kept. */
 export const MAX_BLOCK = 2000;
 
-const RE_ITEM = /^([ \t]*)(?:[-*+]|\d+[.)])(?:[ \t]+(.*))?$/;
+const RE_ITEM = /^([ \t]*)(?:[-*+]|(\d+)[.)])(?:[ \t]+(.*))?$/;
 const RE_RULE = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const RE_HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
 const RE_FENCE = /^[ \t]*(?:[-*+][ \t]+)?(`{3,}|~{3,})/;
@@ -36,6 +39,8 @@ interface Row {
   kind: 'item' | 'heading' | 'text' | 'blank' | 'code';
   text: string;
   level: number; // of a heading
+  /** The number an item of a numbered list is written with. */
+  num?: number;
 }
 
 function width(ws: string): number {
@@ -73,7 +78,7 @@ function rows(text: string): Row[] {
       const rest = raw.slice(raw.indexOf(f[1]) + f[1].length);
       if (!rest.includes(f[1])) fence = f[1];
     }
-    if (item) out.push({ indent, kind: 'item', text: item[2] ?? '', level: 0 });
+    if (item) out.push({ indent, kind: 'item', text: item[3] ?? '', level: 0, ...(item[2] ? { num: +item[2] } : {}) });
     else if ((m = RE_HEADING.exec(raw))) out.push({ indent: 0, kind: 'heading', text: m[2], level: m[1].length });
     else out.push({ indent, kind: f ? 'code' : 'text', text: raw.slice(ws.length), level: 0 });
   }
@@ -206,6 +211,14 @@ function context(r: Row[], n: number): LineContext {
 
 const firstLine = (s: string) => clip(s);
 
+/** The number of a numbered item that comes after `before` under the same block: one more than the
+ *  item before it, or the number it is written with when it starts the list, as Markdown counts. */
+function numOf(row: Row, before: OutlineBlock[]): { n?: number } {
+  if (row.num === undefined) return {};
+  const last = before[before.length - 1];
+  return { n: last?.n !== undefined ? last.n + 1 : row.num };
+}
+
 /** Fill a list item's nested items in; returns the line after the last one. */
 function kidsOf(r: Row[], n: number, into: OutlineBlock, budget: { n: number }): number {
   const at = r[n].indent;
@@ -216,7 +229,7 @@ function kidsOf(r: Row[], n: number, into: OutlineBlock, budget: { n: number }):
     if (p.kind !== 'item' || p.indent <= at) break;
     if (budget.n <= 0) { into.cut = true; return skip(r, i, at); }
     budget.n--;
-    const kid: OutlineBlock = { text: blockText(r, i), line: i, kids: [] };
+    const kid: OutlineBlock = { text: blockText(r, i), line: i, kids: [], ...numOf(r[i], into.kids) };
     into.kids.push(kid);
     i = kidsOf(r, i, kid, budget);
   }
@@ -263,8 +276,9 @@ function fill(r: Row[], i: number, end: number, root: OutlineBlock, budget: { n:
     }
     if (row.kind === 'item') {
       while (items.length && items[items.length - 1].indent >= row.indent) items.pop();
-      const b: OutlineBlock = { text: blockText(r, i), line: i, kids: [] };
-      (items[items.length - 1]?.b ?? under()).kids.push(b); items.push({ indent: row.indent, b });
+      const to = items[items.length - 1]?.b ?? under();
+      const b: OutlineBlock = { text: blockText(r, i), line: i, kids: [], ...numOf(row, to.kids) };
+      to.kids.push(b); items.push({ indent: row.indent, b });
       i = ownEnd(r, i); continue;
     }
     // a paragraph, a quote, a table: the lines up to a blank one. A block of code: up to its end.
@@ -273,7 +287,8 @@ function fill(r: Row[], i: number, end: number, root: OutlineBlock, budget: { n:
     const part = r.slice(i, stop), base = Math.min(...part.map((p) => p.indent));
     if (row.indent === 0) items = [];
     const body = row.kind === 'text' ? paraText(part) : part.map((p) => ' '.repeat(p.indent - base) + p.text).join('\n');
-    (row.indent > 0 && items.length ? items[items.length - 1].b : under()).kids.push({ text: clip(body), line: i, kids: [] });
+    // a line that is only a block's id ("^a1b2", under a table or a quote) is no block: Obsidian hides it
+    if (!/^\^[A-Za-z0-9-]+$/.test(body.trim())) (row.indent > 0 && items.length ? items[items.length - 1].b : under()).kids.push({ text: clip(body), line: i, kids: [] });
     i = stop;
   }
 }

@@ -35,6 +35,8 @@
 - A property whose value is a path to a note (OKF's `superseded_by`, `sources[].resource`) links to that
   note, and the note's page lists it.
 - A property that links to the page is drawn as its attribute block (`related:: [[Page]]`).
+- Markdown tables are drawn as Roam's tables, and numbered lists keep their numbers, drawn where Roam
+  draws them for a numbered list.
 - The index is built again by the first scan after this update.
 - Frontmatter `tags` written as one string with commas or spaces (`tags: a, b`) no longer make tags.
   Obsidian reads tags from a list (`tags: [a, b]`), and Vaults now does the same.

@@ -315,6 +315,16 @@ export class VaultIndex {
     for (const [p, n] of this.notes) if (p.startsWith(folder + '/')) out.push(n);
     return out;
   }
+  /** RahalOS: the paths of every file inside a folder (notes and attachments), at any depth. */
+  filePathsIn(folder: string): string[] {
+    const out: string[] = [];
+    for (const p of this.files.keys()) if (p.startsWith(folder + '/')) out.push(p);
+    return out;
+  }
+  /** RahalOS: folders named exactly like a page title that hold files, notes or not (a folder of
+   *  PDFs has no note, so `foldersNamed` misses it). */
+  fileFoldersNamed(title: string): string[] { return foldersIn(this.files.keys(), title); }
+
   /** The paths of the notes inside a folder, at any depth. */
   notePathsIn(folder: string): string[] {
     const out: string[] = [];
@@ -432,6 +442,19 @@ function pull<V>(m: Map<string, V[]>, k: string, v: V) {
 
 /** The folders above some notes, at any depth, each with how many of those notes are under it:
  *  rows of path, lowercase name, count. */
+/** RahalOS: the folders named `title` (exactly, NFC or NFD) among some file paths. */
+export function foldersIn(paths: Iterable<string>, title: string): string[] {
+  const forms = [...new Set([title.normalize('NFC'), title.normalize('NFD')])].filter(Boolean);
+  const out = new Set<string>();
+  for (const p of paths) for (const t of forms) {
+    let i = -1;
+    if (p.startsWith(t + '/')) i = 0;
+    else { const j = p.indexOf('/' + t + '/'); if (j >= 0) i = j + 1; }
+    if (i >= 0) out.add(p.slice(0, i + t.length));
+  }
+  return [...out];
+}
+
 export function dirCounts(paths: Iterable<string>, by = 1): [string, string, number][] {
   const n = new Map<string, number>();
   for (const p of paths) for (let d = dirOf(p); d; d = dirOf(d)) n.set(d, (n.get(d) ?? 0) + by);

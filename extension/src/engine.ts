@@ -43,7 +43,8 @@ export interface Backlink {
 export interface Tagged { path: string; title: string; tag: string }
 /** A note inside a folder named like the page. */
 /** `from`: where in `path` the folder named like the page starts (0 at the top of the vault). */
-export interface FolderNote { path: string; title: string; from: number }
+/** `from`: where the matched folder's name starts in `path`; `at`: where the path inside that folder starts. */
+export interface FolderNote { path: string; title: string; from: number; at: number }
 export interface PageResult {
   title: string;
   counterparts: Counterpart[];
@@ -429,23 +430,26 @@ export class VaultEngine {
   private inFolders(title: string, shown: Set<string>): FolderNote[] {
     // A folder inside one already found (a copy kept in a subfolder, say) is covered by that one.
     const dirs: string[] = [];
-    for (const d of this.idx.foldersNamed(title)) if (!dirs.some((top) => d.startsWith(top + '/'))) dirs.push(d);
-    const out: { path: string; title: string; from: number; depth: number }[] = [];
+    // RahalOS: a folder with files but no note (PDFs, say) is matched too.
+    let named = this.idx.foldersNamed(title);
+    if (!named.length) named = this.idx.fileFoldersNamed(title).sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+    for (const d of named) if (!dirs.some((top) => d.startsWith(top + '/'))) dirs.push(d);
+    const out: { path: string; title: string; from: number; at: number; depth: number }[] = [];
     // A page A/B is the last two folders of the path, a page B the last one.
     const parts = title.replace(/^\/+|\/+$/g, '').split('/').length;
     for (const dir of dirs) {
       let from = dir.length;
       for (let i = 0; i < parts && from > 0; i++) from = dir.lastIndexOf('/', from - 1);
       from = Math.max(from, -1) + 1;
-      for (const path of this.idx.notePathsIn(dir)) {
+      for (const path of this.idx.filePathsIn(dir)) { // RahalOS: every file, not only notes
         if (shown.has(path)) continue;
         let depth = 0;
         for (let i = dir.length + 1; (i = path.indexOf('/', i) + 1) > 0;) depth++;
-        out.push({ path, title: this.name(path), from, depth });
+        out.push({ path, title: this.name(path), from, at: dir.length + 1, depth });
       }
     }
     out.sort((x, y) => x.depth - y.depth || x.path.localeCompare(y.path));
-    return out.slice(0, MAX_FOLDER_NOTES).map(({ path, title, from }) => ({ path, title, from }));
+    return out.slice(0, MAX_FOLDER_NOTES).map(({ path, title, from, at }) => ({ path, title, from, at }));
   }
 
   async read(path: string): Promise<string> { return this.fs.readText(path); }

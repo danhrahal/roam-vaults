@@ -2,7 +2,7 @@
 // (VaultIndex.candidates and its Obsidian tie-break rules are inherited unchanged). The database is
 // kept across starts, so it is also the parse cache: a note whose size and time match is not read
 // again. Runs in the indexer worker.
-import { VaultIndex, NONE, baseOf, fileKeyPath, aliasKeys, noteTagKeys, dirCounts, type Stamp } from '../core/vault-index.ts';
+import { VaultIndex, NONE, baseOf, fileKeyPath, aliasKeys, noteTagKeys, dirCounts, foldersIn, type Stamp } from '../core/vault-index.ts';
 import type { Note } from '../core/types.ts';
 import { LOOKUP_INDEXES, DIRS_ADD } from './schema.ts';
 import { FuzzyTitles } from './fuzzy.ts';
@@ -190,6 +190,16 @@ export class SqlIndex extends VaultIndex {
 
   override notePathsIn(folder: string): string[] {
     return this.col('SELECT f.path FROM files f JOIN notes n ON n.id = f.id WHERE f.path >= ? AND f.path < ?', [folder + '/', folder + '0']);
+  }
+  // RahalOS: every file in a folder, and folders named like a page that hold no note.
+  override filePathsIn(folder: string): string[] {
+    return this.col('SELECT path FROM files WHERE path >= ? AND path < ?', [folder + '/', folder + '0']);
+  }
+  override fileFoldersNamed(title: string): string[] {
+    const hits: string[] = [];
+    for (const t of new Set([title.normalize('NFC'), title.normalize('NFD')]))
+      if (t) hits.push(...this.col('SELECT path FROM files WHERE substr(path, 1, ?) = ? OR instr(path, ?) > 0', [t.length + 1, t + '/', '/' + t + '/']));
+    return foldersIn(hits, title);
   }
   override dirsNamed(name: string): readonly string[] { return this.col('SELECT path FROM dirs WHERE name = ?', [name]); }
   /** Notes came (by = 1) or went (by = -1): keep the count of notes under each folder above them. */

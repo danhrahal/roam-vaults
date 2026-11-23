@@ -1,6 +1,6 @@
 // DOM pieces: styles, toasts, the "External Vault References" panel and the read-only note viewer.
 // Plain DOM with Blueprint 3 class names (Roam ships Blueprint), so no bundled UI library.
-import type { PageResult, Backlink, BacklinkLine } from '../engine.ts';
+import type { PageResult, Backlink, BacklinkLine, FolderNote } from '../engine.ts';
 import { blockBody, inline } from './markdown.ts';
 import { contextOf, kidsAt, lineOfSub, outlineOf, type OutlineBlock, type LineContext } from '../core/outline.ts';
 import { splitFrontmatter } from '../core/frontmatter.ts';
@@ -30,6 +30,26 @@ const STYLES = `
 .rv-vault{color:#8a9ba8}
 .rv-tagref{color:rgb(167,182,194);font-size:14px;margin-right:8px}
 .rv-content{margin-left:4px}
+.rv-dir-kids{margin-left:22px}
+.rv-tl-where{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:13px;color:#8a9ba8;margin:10px 0 2px}
+.rv-tl-hub{font-size:11px;font-weight:700;color:#fff;border-radius:4px;padding:1px 6px;letter-spacing:.04em}
+.rv-tl-sep{opacity:.7}
+.rv-tl-here{color:inherit;font-weight:500;filter:brightness(.6);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
+.rv-tl-finder{min-height:20px!important;padding:0 6px!important;font-size:12px}
+.rv-tl-finder .bp3-icon-standard{margin-right:4px}
+.rv-tl-grp{display:flex;align-items:center;gap:8px;margin:12px 0 3px;font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8a9ba8}
+.rv-tl-grp:after{content:"";flex:1;height:1px;background:rgba(138,155,168,.3)}
+.rv-tl-n{font-weight:500;opacity:.75;font-size:12px;letter-spacing:0}
+.rv-tl-file,.rv-tl-dir{display:flex;align-items:center;gap:6px;padding:3px 6px 3px 0;font-size:14.5px;line-height:1.45;cursor:pointer;border-radius:6px;color:inherit}
+.rv-tl-file:hover,.rv-tl-dir:hover{background:rgba(138,155,168,.14)}
+.rv-tl-dir .rm-caret{width:14px;flex:none;margin:0}
+.rv-tl-file{padding-left:14px}
+.rv-tl-ic{width:34px;flex:none;display:flex;justify-content:center;align-items:center;color:#a9acb9}
+.rv-tl-ext{font-size:10px;font-weight:700;border-radius:3px;padding:0 4px;letter-spacing:.03em;border:1px solid #c7cede;color:#5a6a8c;line-height:1.5}
+.rv-tl-ext.rv-tl-pdf{border-color:#e3b5b1;color:#b3362f}
+.rv-tl-preview{margin:2px 0 8px 54px}
+.rv-tl-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rv-tl-dir .rv-tl-name{font-weight:500}
 .rv-code{margin:0;white-space:pre-wrap}
 .rv-panel .rm-block-main:hover>.controls .rv-kids-caret{opacity:.7}
 .rv-checkbox{pointer-events:none}
@@ -383,7 +403,7 @@ function sectionHead(label: HTMLElement, open = true, tools: HTMLElement[] = [])
 function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[], showVault: boolean, find = '', filtering = false): HTMLElement {
   const out = h('div', { class: 'rv-groups rm-mentions refs-by-page-view' }); // Roam's own list classes: its style sheet lays the groups out
   /** One note: caret + (vault/)path as a namespaced title (+ tag); content shows when open. The open-in-editor button lives in the viewer. */
-  const group = (v: PanelVault, key: string, path: string, title: string, defOpen: boolean, tag: string | undefined, content: () => HTMLElement, cls = '', marks: number[] = [], from?: number) => {
+  const group = (v: PanelVault, key: string, path: string, title: string, defOpen: boolean, tag: string | undefined, content: () => HTMLElement, cls = '', marks: number[] = [], from?: number, rel?: number) => {
     const k = `${v.id}\n${key}\n${path}`;
     const box = h('div', { class: 'rv-content' });
     const c = caret(false, 'rm-caret-showing rv-group-caret dont-focus-block');
@@ -401,13 +421,16 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
     set(groupOpen.get(k) ?? defOpen);
     // The folders a note is in, in the grey a vault's name has, so the title reads as the note's name.
     // A note listed for a folder named like the page reads from that folder on: only the path above it is grey.
+    // RahalOS: a note in the folder tree (`rel`) shows only its name; the full path is in the tooltip.
     const last = path.lastIndexOf('/') + 1, name = from ?? last;
+    const grey = rel !== undefined ? path.slice(rel, name) : (showVault ? `${v.name}/` : '') + path.slice(0, name);
+    const full = (showVault ? `${v.name}/` : '') + path;
     return h('div', { class: 'rm-ref-page-view rv-group' + cls },
       h('div', { class: 'flex-h-box rm-title-arrow-wrapper rv-group-head' }, c,
         h('div', { class: 'rm-ref-page-view-title rv-group-title' },
-          h('a', { onclick: (e: MouseEvent) => v.act.view(path, undefined, e.shiftKey) },
+          h('a', { onclick: (e: MouseEvent) => v.act.view(path, undefined, e.shiftKey), title: full, 'aria-label': full },
             h('span', { class: 'rm-page__title rv-note', style: 'cursor: pointer; text-decoration: none;' },
-              showVault || name ? h('span', { class: 'rv-vault' }, (showVault ? `${v.name}/` : '') + path.slice(0, name)) : null,
+              grey ? h('span', { class: 'rv-vault' }, grey) : null,
               ...marked(path.slice(name, last) + title, last - name, marks)))),
         tag ? h('span', { class: 'rv-tagref' }, `#${tag}`) : null),
       box);
@@ -443,10 +466,135 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
       return box;
     }));
   }
-  // Notes inside a folder named like the page: listed like any note, by their path in the vault.
-  for (const { v, r } of list) for (const f of r.inFolders ?? []) {
-    const tag = tagOnce(v, f.path);
-    rows.push(() => group(v, 'folder', f.path, f.title, false, tag, preview(v, f.path), '', [], f.from));
+  // RahalOS: the files inside a folder named like the page, as a timeline. One line says where the
+  // folder is (Hub, Area, folder) with a button that opens it in the Finder; then subfolders and
+  // undated files, then the dated files by day, newest first, by their name without the date. A note
+  // opens like any note here; another file (a PDF) is shown in the Finder through RahalOS Portal.
+  type Item = FolderNote & { label: string; ext: string; date?: string };
+  type Dir = { files: Item[]; dirs: Map<string, Dir> };
+  const newDir = (): Dir => ({ files: [], dirs: new Map() });
+  const countOf = (d: Dir): number => d.files.length + [...d.dirs.values()].reduce((n, x) => n + countOf(x), 0);
+  const dirOrder = (a: string, b: string) => (+a.startsWith('_ARCHIVE') - +b.startsWith('_ARCHIVE')) || a.localeCompare(b);
+  const MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  // The Portal resolves paths against the Dropbox folder: a vault that is that folder adds nothing,
+  // a vault inside it (a Hub folder such as NE) adds its name.
+  const inDropbox = (v: PanelVault, path: string) => (v.name === 'Dropbox' ? path : `${v.name}/${path}`);
+  const portal = (v: PanelVault, path: string) => `rahalos://vault/${inDropbox(v, path).split('/').map(encodeURIComponent).join('/')}`;
+  const HUBS = /^(PR|LX|DD|NE|OW)$/;
+  const icon = (svg: string) => { const e = h('span', { class: 'rv-tl-ic' }); e.innerHTML = svg; return e; };
+  const DOC = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>';
+  const FOLDER = '<svg viewBox="0 0 16 16" width="15" height="15"><path d="M1 3.5h5l1.5 1.5H15v8.5H1z" fill="#c9b78f"/></svg>';
+  const go = (url: string) => { const a = document.createElement('a'); a.href = url; a.rel = 'noopener'; a.click(); };
+  const itemOf = (f: FolderNote): Item => {
+    const file = f.path.slice(f.path.lastIndexOf('/') + 1);
+    const ext = /\.md$/i.test(file) ? 'md' : (file.match(/\.([^.]+)$/)?.[1] ?? '').toLowerCase();
+    const base = file.replace(/(\.pdf)?\.[^.]+$/i, '');
+    const m = base.match(/^(\d{4})[-_](\d{2})[-_](\d{2}) - (.+)$/);
+    return { ...f, ext, label: m ? m[4] : base, date: m ? `${m[1]}-${m[2]}-${m[3]}` : undefined };
+  };
+  const heading = (text: string, n: number) =>
+    h('div', { class: 'rv-tl-grp' }, h('span', {}, text), h('span', { class: 'rv-tl-n' }, String(n)));
+  const fileRow = (v: PanelVault, f: Item) => {
+    const tip = `${inDropbox(v, f.path)} — mostrar no Finder`;
+    return h('div', { class: 'rv-tl-file', title: tip, 'aria-label': tip, onclick: () => go(portal(v, f.path)) },
+      h('span', { class: 'rv-tl-ic' }, h('span', { class: 'rv-tl-ext' + (f.ext === 'pdf' ? ' rv-tl-pdf' : '') }, f.ext.toUpperCase().slice(0, 4) || 'ARQ')),
+      h('span', { class: 'rv-tl-name' }, f.label));
+  };
+  /** A note: its name, a click shows it here as Roam blocks, a double click opens the viewer. */
+  const noteRow = (v: PanelVault, f: Item, tag: string | undefined) => {
+    const k = `${v.id}\nfolder\n${f.path}`;
+    const box = h('div', { class: 'rv-content rv-tl-preview' });
+    const row = h('div', { class: 'rv-tl-file rv-tl-md' });
+    const set = (open: boolean) => {
+      row.classList.toggle('rv-tl-open', open); box.hidden = !open;
+      if (open && !box.childNodes.length) box.append(preview(v, f.path)());
+    };
+    const toggle = () => {
+      const open = box.hidden;
+      groupOpen.delete(k); groupOpen.set(k, open);
+      if (groupOpen.size > 500) groupOpen.delete(groupOpen.keys().next().value!);
+      set(open);
+    };
+    const tip = `${inDropbox(v, f.path)} — clique para ver aqui, duplo clique para abrir`;
+    row.setAttribute('title', tip); row.setAttribute('aria-label', tip);
+    row.addEventListener('click', toggle);
+    row.addEventListener('dblclick', (e) => { e.preventDefault(); v.act.view(f.path, undefined, e.shiftKey); });
+    row.append(icon(DOC), h('span', { class: 'rv-tl-name' }, f.label));
+    if (tag) row.append(h('span', { class: 'rv-tagref' }, `#${tag}`));
+    set(groupOpen.get(k) ?? false);
+    return h('div', {}, row, box);
+  };
+  const dirGroup = (v: PanelVault, key: string, name: string, d: Dir, kids: () => HTMLElement[]) => {
+    const k = `${v.id}\ndir\n${key}`, n = countOf(d);
+    const box = h('div', { class: 'rv-content rv-dir-kids' });
+    const c = caret(false, 'rm-caret-showing rv-group-caret dont-focus-block');
+    const set = (open: boolean) => {
+      c.classList.toggle('rm-caret-open', open); c.classList.toggle('rm-caret-closed', !open);
+      box.hidden = !open;
+      if (open && !box.childNodes.length) box.append(...kids());
+    };
+    const toggle = () => {
+      const open = box.hidden;
+      groupOpen.delete(k); groupOpen.set(k, open);
+      if (groupOpen.size > 500) groupOpen.delete(groupOpen.keys().next().value!);
+      set(open);
+    };
+    c.addEventListener('click', toggle);
+    set(groupOpen.get(k) ?? false);
+    const tip = `${n} ${n === 1 ? 'arquivo' : 'arquivos'} em ${key}`;
+    return h('div', { class: 'rv-dir' },
+      h('div', { class: 'flex-h-box rv-tl-dir', title: tip, 'aria-label': tip }, c, icon(FOLDER),
+        h('span', { class: 'rv-tl-name', onclick: toggle }, name), h('span', { class: 'rv-tl-n' }, String(n))),
+      box);
+  };
+  const timeline = (v: PanelVault, d: Dir, at: string, tags: Map<string, string | undefined>): (() => HTMLElement)[] => {
+    const out: (() => HTMLElement)[] = [];
+    const draw = (f: Item) => () => (f.ext === 'md' ? noteRow(v, f, tags.get(f.path)) : fileRow(v, f));
+    const dirs = [...d.dirs.keys()].sort(dirOrder);
+    const undated = d.files.filter((f) => !f.date).sort((a, b) => a.label.localeCompare(b.label));
+    if (dirs.length || undated.length) {
+      out.push(() => heading(dirs.length ? 'Pastas e sem data' : 'Sem data', dirs.length + undated.length));
+      for (const s of dirs) out.push(() => { const x = d.dirs.get(s)!, key = at + s + '/'; return dirGroup(v, key.slice(0, -1), s, x, () => timeline(v, x, key, tags).map((row) => row())); });
+      for (const f of undated) out.push(draw(f));
+    }
+    const days = new Map<string, Item[]>();
+    for (const f of d.files) if (f.date) { const l = days.get(f.date) ?? []; l.push(f); days.set(f.date, l); }
+    for (const day of [...days.keys()].sort().reverse()) {
+      const [y, m, dd] = day.split('-').map(Number), list = days.get(day)!.sort((a, b) => a.label.localeCompare(b.label));
+      out.push(() => heading(`${dd} ${MONTHS[m - 1]} ${y}`, list.length));
+      for (const f of list) out.push(draw(f));
+    }
+    return out;
+  };
+  const where = (v: PanelVault, base: string, n: number) => {
+    const full = inDropbox(v, base), parts = full.split('/');
+    const hub = HUBS.test(parts[0]) ? parts[0] : v.name;
+    const areaPart = HUBS.test(parts[0]) ? parts[1] : '';
+    const area = areaPart && parts.length > 2 ? areaPart.replace(new RegExp(`^${hub} - `), '') : '';
+    const finder = `Abrir ${parts[parts.length - 1]} no Finder`;
+    return h('div', { class: 'rv-tl-where', title: `${full} — ${n} ${n === 1 ? 'arquivo' : 'arquivos'}` },
+      h('span', { class: 'rv-tl-hub', style: `background: var(--hub-${hub.toLowerCase()}-color, #8a9ba8)` }, hub),
+      area ? h('span', {}, area) : null, area ? h('span', { class: 'rv-tl-sep' }, '›') : null,
+      h('span', { class: 'rv-tl-here' }, parts[parts.length - 1]),
+      h('button', { class: 'bp3-button bp3-small bp3-minimal rv-tl-finder', title: finder, 'aria-label': finder, onclick: () => go(portal(v, base)) },
+        h('span', { class: 'bp3-icon-standard bp3-icon-folder-open' }), 'Finder'));
+  };
+  for (const { v, r } of list) {
+    const roots = new Map<string, Dir>();
+    const tags = new Map<string, string | undefined>();
+    for (const f of r.inFolders ?? []) {
+      tags.set(f.path, tagOnce(v, f.path));
+      const base = f.path.slice(0, f.at - 1);
+      let d: Dir = roots.get(base) ?? newDir();
+      roots.set(base, d);
+      const segs = f.path.slice(f.at).split('/'); segs.pop();
+      for (const s of segs) { const x: Dir = d.dirs.get(s) ?? newDir(); d.dirs.set(s, x); d = x; }
+      d.files.push(itemOf(f));
+    }
+    for (const [base, d] of roots) {
+      rows.push(() => where(v, base, countOf(d)));
+      rows.push(...timeline(v, d, base + '/', tags));
+    }
   }
   for (const { v, r } of list) for (const t of r.tagged) {
     const tag = tagOnce(v, t.path);

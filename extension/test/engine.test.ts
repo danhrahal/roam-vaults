@@ -396,15 +396,19 @@ test('the notes in a folder named like the page are listed, the nearest first', 
   await e.build();
   const inFolders = async (title: string) => (await e.query(title)).inFolders.map((n) => n.path);
 
-  // Any letter case, at any depth; notes only; a folder's own notes before those in its subfolders.
+  // Any letter case, at any depth; every file (RahalOS: PDFs and images too); a folder's own files
+  // before those in its subfolders.
   assert.deepEqual(await inFolders('P - Build the shed'), [
     'Work/_ARCHIVE/p - build the SHED/Old.md',
     'Work/_PROJECTS/P - Build the shed/Plan.md',
+    'Work/_PROJECTS/P - Build the shed/sketch.png',
+    'Work/_PROJECTS/P - Build the shed/Quotes/invoice.pdf',
     'Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md',
   ]);
-  assert.deepEqual(await inFolders('Quotes'), ['Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md']);
+  assert.deepEqual(await inFolders('Quotes'), ['Work/_PROJECTS/P - Build the shed/Quotes/invoice.pdf', 'Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md']);
   assert.deepEqual(await inFolders('Nothing here'), []);
-  assert.deepEqual(await inFolders('Scans'), [], 'a folder with no note in it is not one');
+  assert.deepEqual(await inFolders('Scans'), ['Scans/receipt.pdf'], 'RahalOS: a folder with no note in it is matched by its exact name');
+  assert.deepEqual(await inFolders('scans'), [], 'without a note, only the exact name matches');
 
   // A namespaced title matches a folder by its path's end.
   assert.deepEqual(await inFolders('Areas/Home'), ['Areas/Home/Garden.md', 'Areas/Home/Home.md', 'Areas/Home/Bills/2026.md']);
@@ -414,17 +418,19 @@ test('the notes in a folder named like the page are listed, the nearest first', 
   assert.deepEqual(home.counterparts.map((c) => c.path), ['Areas/Home/Home.md', 'Other/Home.md']);
   assert.deepEqual(home.backlinks.map((b) => b.path), ['Areas/Home/Bills/2026.md']);
   // `from`: where the folder named like the page starts in the path.
-  assert.deepEqual(home.inFolders, [{ path: 'Areas/Home/Garden.md', title: 'Garden', from: 6 }]);
+  assert.deepEqual(home.inFolders, [{ path: 'Areas/Home/Garden.md', title: 'Garden', from: 6, at: 11 }]);
   assert.deepEqual((await e.query('Areas/Home')).inFolders.map((n) => n.from), [0, 0, 0], 'a folder at the top of the vault');
   assert.deepEqual((await e.query('P - Build the shed')).inFolders.map((n) => n.path.slice(n.from).split('/')[0]),
-    ['p - build the SHED', 'P - Build the shed', 'P - Build the shed']);
-  assert.deepEqual((await e.query('_PROJECTS/P - Build the shed')).inFolders.map((n) => n.path.slice(0, n.from)), ['Work/', 'Work/']);
+    ['p - build the SHED', 'P - Build the shed', 'P - Build the shed', 'P - Build the shed', 'P - Build the shed']);
+  assert.deepEqual((await e.query('_PROJECTS/P - Build the shed')).inFolders.map((n) => n.path.slice(0, n.from)), ['Work/', 'Work/', 'Work/', 'Work/']);
 
   // A folder of the same name inside a matched one (a copy kept in a subfolder) adds nothing twice.
   fs.write('Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md', 'draft\n');
   await e.refresh(['Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md']);
   assert.deepEqual((await inFolders('P - Build the shed')).slice(1), [
     'Work/_PROJECTS/P - Build the shed/Plan.md',
+    'Work/_PROJECTS/P - Build the shed/sketch.png',
+    'Work/_PROJECTS/P - Build the shed/Quotes/invoice.pdf',
     'Work/_PROJECTS/P - Build the shed/Quotes/Lumber.md',
     'Work/_PROJECTS/P - Build the shed/Old copy/P - Build the shed/Draft.md',
   ]);
@@ -435,17 +441,17 @@ test('the notes in a folder named like the page are listed, the nearest first', 
   fs.write('Work/_PROJECTS/P - Build the shed/Notes/Day 1.md', 'day\n');
   await e.refresh(['Work/_PROJECTS/P - Build the shed/Notes/Day 1.md']);
   assert.deepEqual(await inFolders('Notes'), ['Work/_PROJECTS/P - Build the shed/Notes/Day 1.md']);
-  assert.equal((await inFolders('P - Build the shed')).length, 4);
+  assert.equal((await inFolders('P - Build the shed')).length, 6, 'RahalOS: with its PNG and PDF');
   fs.rm('Work/_ARCHIVE/p - build the SHED/Old.md');
   await e.refresh(['Work/_ARCHIVE/p - build the SHED/Old.md']);
-  assert.equal((await inFolders('P - Build the shed')).length, 3);
+  assert.equal((await inFolders('P - Build the shed')).length, 5);
   assert.deepEqual(e.idx.foldersNamed('p - build the shed'), ['Work/_PROJECTS/P - Build the shed']);
 
   // A folder moved to the archive is found at its new path, with all its notes.
   fs.mv('Work/_PROJECTS/P - Build the shed', 'Work/_ARCHIVE/2026_11 - P - Build the shed');
   await e.refreshFolders([{ path: 'Work/_ARCHIVE/2026_11 - P - Build the shed', from: 'Work/_PROJECTS/P - Build the shed' }]);
   assert.deepEqual(await inFolders('P - Build the shed'), []);
-  assert.equal((await inFolders('2026_11 - P - Build the shed')).length, 3);
+  assert.equal((await inFolders('2026_11 - P - Build the shed')).length, 5);
 });
 
 test('an embedded picture is found the way a link is, and is never a note', async () => {

@@ -66,6 +66,10 @@ const FILES = {
   // a numbered list under a line, and a table (embedded by its id, as Obsidian names a table)
   'Brioche plan.md': `- [[Brioche]] steps\n${STEPS.map((t, i) => `    ${i + 1}. ${t}\n`).join('')}- [[Brioche]] table ![[Brioche plan#^amounts]]\n\n${TABLE.map((r, i) => `| ${r.join(' | ')} |\n${i ? '' : '| --- | --- | --- |\n'}`).join('')}\n^amounts\n`,
   'pictures/crumb.png': picture(),
+  // an OKF bundle: notes named by their title, type and status as pages, paths from the note's folder
+  'kb/index.md': '---\nokf_version: "0.3"\ntitle: Bakery suppliers\n---\n# Mills\n\n* [Stone Mill](mills/stone-mill.md)\n',
+  'kb/mills/stone-mill.md': '---\ntype: Supplier\ntitle: Stone Mill\nstatus: stable\n---\n# Flour\n\nRye and spelt, delivered on Mondays. See [the rye order][rye].\n\n[rye]: ../orders/rye.md\n',
+  'kb/orders/rye.md': '---\ntype: Order\ntitle: Weekly rye order\n---\nTwenty sacks.\n',
   'Wholesale.md': exported(PAGES.Wholesale), 'Days/2026/July 9th, 2026.md': exported(PAGES['July 9th, 2026']), 'Sourdough.md': exported(PAGES[PAGE]) };
 
 const browser = await chromium.launch({ env: { ...process.env, LC_ALL: 'C.UTF-8' } });
@@ -95,6 +99,8 @@ await page.evaluate(async ({ PAGES, COLD, STEPS, TABLE }) => {
     try { await api.createPage({ page: { title, uid } }); } catch (e) { if (!api.pull('[:block/uid]', [':node/title', title])) throw new Error(`page ${title}: ${e?.message ?? e}`); }
     await add(api.pull('[:block/uid]', [':node/title', title])[':block/uid'], blocks);
   }
+  await api.createPage({ page: { title: 'Supplier', uid: 'rvhgsuppl' } });
+  if (!api.pull('[:block/uid]', [':node/title', 'Oven'])) await api.createPage({ page: { title: 'Oven', uid: 'rvhgoven0' } });
   await api.createPage({ page: { title: 'Proofing', uid: 'rvhgproof' } });
   await api.createBlock({ location: { 'parent-uid': 'rvhgproof', order: 0 }, block: { string: 'Warm', uid: 'rvhgwarm0', heading: 2, open: true } });
   await api.createBlock({ location: { 'parent-uid': 'rvhgwarm0', order: 0 }, block: { string: 'two hours at 26°', uid: 'rvhgwarm1' } });
@@ -370,6 +376,95 @@ await shot('12-numbered-and-table.png');
   check(`a Markdown table is Roam's table: ${tables[0].length} cells in the same place, size and style`, tables[0].length === 9 && JSON.stringify(tables[0]) === JSON.stringify(tables[1]), '\n  roam  ' + tables[0].join('\n        ') + '\n  vault ' + tables[1].join('\n        '));
 }
 fs.writeFileSync(path.join(OUT, 'measured.json'), JSON.stringify(await measure(), null, 1));
+
+// ---------- an attribute's page ----------
+// "Oven:: ..." on the daily page is a reference on the page Oven in Roam; the same line in the vault is one too
+await open('Oven');
+await page.waitForSelector('.rv-panel .rm-reference-item');
+await page.waitForTimeout(500);
+await shot('14-attribute-page.png');
+compare(await measure(), 'an attribute\'s page');
+
+// ---------- the search box in the section's header ----------
+await open(PAGE);
+await page.waitForSelector('.rv-panel .rm-reference-item');
+await page.waitForTimeout(500);
+for (const root of ['.roam-article .rm-reference-container', '.roam-article .rv-panel']) {
+  await page.locator(`${root} .rm-mentions-search__search-icon`).first().click();
+  await page.keyboard.type('steam');
+}
+await page.waitForTimeout(1500);
+await page.mouse.move(5, 5);
+await shot('15-search.png');
+compare(await measure(), 'searched for "steam"');
+{
+  const heads = await page.evaluate(() => ['.roam-article .rm-reference-container', '.roam-article .rv-panel'].map((root) => {
+    const box = document.querySelector(`${root} .rm-mentions-search`), i = box.querySelector('input'), r = i.getBoundingClientRect(), cs = getComputedStyle(i);
+    return { cls: box.className.replace(/\s+/g, ' '), w: Math.round(r.width), h: Math.round(r.height), font: cs.fontSize, label: box.parentElement.querySelector('strong')?.textContent };
+  }));
+  check('the search box is Roam\'s, open, the same size', heads[0].cls === heads[1].cls && heads[0].w === heads[1].w && heads[0].h === heads[1].h && heads[0].font === heads[1].font, JSON.stringify(heads));
+  check('the header counts what the search left, as Roam\'s does', /^\d+ of \d+ linked references$/.test(heads[0].label) && heads[1].label === '1 of 3 external vault references', JSON.stringify(heads.map((x) => x.label)));
+}
+await page.locator('.roam-article .rv-panel .rm-mentions-search .bp3-input-action').click();
+await page.waitForTimeout(500);
+check('the cross clears the search', (await page.locator('.roam-article .rv-panel .rv-sec-head strong').innerText()).endsWith('External Vault References') && (await page.locator('.roam-article .rv-panel .rm-reference-item', { hasText: 'trial bake' }).count()) === 1);
+
+// ---------- the filter ----------
+await page.locator('.roam-article .rm-reference-container .rm-mentions-search .bp3-input-action').first().click();
+await page.mouse.click(5, 500);
+await page.waitForTimeout(800);
+const filterList = async (ours) => {
+  await page.locator(`.roam-article ${ours ? '.rv-panel' : '.rm-reference-container'} .bp3-icon-filter`).first().click();
+  await page.waitForTimeout(800);
+  const sel = ours ? '.bp3-portal[data-roam-vaults] .rm-choose-filter' : '.bp3-portal:not([data-roam-vaults]) .rm-choose-filter';
+  const names = await page.locator(`${sel} .rm-filter-button button`).allInnerTexts();
+  return { sel, names: names.map((t) => t.replace(/\s+/g, ' ').trim()) };
+};
+{
+  const roam = await filterList(false);
+  await page.keyboard.press('Escape'); await page.mouse.click(5, 500); await page.waitForTimeout(400);
+  const ours = await filterList(true);
+  // Roam's own "All Daily Notes" groups its daily pages: a vault has none. The order among equal counts is Roam's own.
+  const set = (a) => JSON.stringify(a.filter((t) => !t.startsWith('All Daily Notes')).sort());
+  check('the filter lists the pages the references link to, counted as Roam counts them', set(roam.names) === set(ours.names), `\n  roam  ${roam.names.join(' | ')}\n  vault ${ours.names.join(' | ')}`);
+  await shot('16-filter.png', '.bp3-portal[data-roam-vaults] .bp3-popover');
+  await page.locator(`${ours.sel} .rm-filter-button button`, { hasText: 'Harbour Cafe' }).first().click();
+  await page.keyboard.press('Escape'); await page.mouse.click(5, 500); await page.waitForTimeout(400);
+  await filterList(false);
+  await page.locator(`${roam.sel} .rm-filter-button button`, { hasText: 'Harbour Cafe' }).first().click();
+  await page.keyboard.press('Escape'); await page.mouse.click(5, 500); await page.waitForTimeout(1000);
+  await shot('17-filtered.png');
+  compare(await measure(), 'filtered to Harbour Cafe');
+  const labels = await page.evaluate(() => [document.querySelector('.roam-article .rm-reference-container strong')?.textContent, document.querySelector('.roam-article .rv-panel .rv-sec-head strong')?.textContent]);
+  check('the header counts what the filter left, and the icon turns red', /^1 of \d+ linked references$/.test(labels[0]) && labels[1] === '1 of 3 external vault references'
+    && await page.evaluate(() => getComputedStyle(document.querySelector('.roam-article .rv-panel .bp3-icon-filter')).color === getComputedStyle(document.querySelector('.roam-article .rm-reference-container .bp3-icon-filter')).color), JSON.stringify(labels));
+  // take it off again, in both
+  for (const ours of [false, true]) {
+    const { sel } = await filterList(ours);
+    await page.locator(`${sel} .rm-choose-filter__includes .rm-filter-button button`).first().click();
+    await page.keyboard.press('Escape'); await page.mouse.click(5, 500); await page.waitForTimeout(400);
+  }
+}
+
+// ---------- an OKF bundle ----------
+await open('Supplier');
+await page.waitForSelector('.rv-panel .rv-group-title');
+await page.waitForTimeout(500);
+await shot('13-okf-type-page.png');
+check('a type\'s page lists the OKF notes of that type, each named by its title', (await page.locator('.rv-panel .rv-group-title').allInnerTexts()).map((t) => t.trim()).join() === 'kb/mills/Stone Mill');
+check('the note\'s type is drawn as a page reference', (await page.locator('.rv-panel .rm-block-text .rm-page-ref', { hasText: 'Supplier' }).count()) === 1);
+await page.locator('.rv-panel .rv-group-title a').first().click();
+await page.waitForSelector('.rv-note-page .roam-block-container');
+await page.waitForTimeout(300);
+check('it opens as a page named by its title', (await page.locator('.rv-note-page .rm-title-display').innerText()) === 'Stone Mill');
+check('its status is a page reference too', (await page.locator('.rv-note-page .rm-page-ref', { hasText: 'stable' }).count()) === 1);
+check('a reference-style link is drawn as the link it stands for, its definition hidden',
+  (await page.locator('.rv-note-page a.rm-alias--page', { hasText: 'the rye order' }).count()) === 1
+  && !(await page.locator('.rv-note-page').innerText()).includes('[rye]'));
+await page.locator('.rv-note-page [data-rv-target]', { hasText: 'the rye order' }).click();
+await page.waitForFunction(() => document.querySelector('.rv-note-page .rm-title-display')?.textContent === 'Weekly rye order', null, { timeout: 5000 }).catch(() => {});
+check('a link is read from the note\'s folder, and opens the note it names', (await page.locator('.rv-note-page .rm-title-display').innerText()) === 'Weekly rye order');
+
 
 check('no errors in the page', !errors.length, errors.join(' | ').slice(0, 500));
 const failed = checks.filter((c) => !c.ok);

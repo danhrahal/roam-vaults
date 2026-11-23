@@ -165,3 +165,39 @@ test('items of a numbered list carry their numbers, counted as Markdown counts t
   assert.deepEqual(contextOf(note, [3])[0].kids.map((k) => k.n), [undefined, 3, 4]);
   assert.equal(outlineOf(note).some((b) => b.text.includes('^steps')), false); // a line that is only an id is no block
 });
+
+test('OKF: type and status are pages in a bundle, plain words elsewhere', () => {
+  const note = '---\ntype: BigQuery Table\nstatus: draft\nkind: thing\n---\nbody\n';
+  assert.deepEqual(outlineOf(note, true).slice(0, 3).map((b) => b.text), ['type:: [[BigQuery Table]]', 'status:: [[draft]]', 'kind:: thing']);
+  assert.deepEqual(outlineOf(note).slice(0, 2).map((b) => b.text), ['type:: BigQuery Table', 'status:: draft']);
+  assert.equal(contextOf(note, [1], true)[0].text, 'type:: [[BigQuery Table]]');
+});
+
+test('reference-style links read as the inline links they stand for; their definitions are hidden', async () => {
+  const { outlineOf } = await import('../src/core/outline.ts');
+  const text = [
+    '# Suppliers',                                           // 0
+    '',                                                      // 1
+    'Flour from [the mill][mill], rye from [Rye Farm][].',   // 2
+    '- ask [Mill] about spelt, not `[mill]` in code',        // 3
+    '- [ ] a task, [[Oven]] and [x](y.md) as they were',     // 4
+    '',                                                      // 5
+    '[mill]: Suppliers/Stone%20Mill.md "the mill"',          // 6
+    '[rye farm]: <Rye Farm.md>',                             // 7
+  ].join('\n');
+  const o = outlineOf(text);
+  assert.equal(o.length, 1);
+  assert.deepEqual(o[0].kids.map((k) => k.text), [
+    'Flour from [the mill](Suppliers/Stone%20Mill.md), rye from [Rye Farm](<Rye Farm.md>).',
+    'ask [Mill](Suppliers/Stone%20Mill.md) about spelt, not `[mill]` in code',
+    '[ ] a task, [[Oven]] and [x](y.md) as they were',
+  ]);
+  const { parseNote } = await import('../src/core/parser.ts');
+  const links = parseNote('Notes.md', text).links.filter((l) => l.kind === 'md').map((l) => [l.target, l.line, l.display]);
+  assert.deepEqual(links.sort((a, b) => +a[1]! - +b[1]!), [
+    ['y.md', 4, 'x'],
+    ['Suppliers/Stone Mill.md', 2, 'the mill'],
+    ['Rye Farm.md', 2, 'Rye Farm'],
+    ['Suppliers/Stone Mill.md', 3, 'Mill'],
+  ].sort((a, b) => +a[1]! - +b[1]!));
+});

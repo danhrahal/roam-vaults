@@ -2,6 +2,9 @@
 
 ## 0.3.0 (unreleased)
 
+- The README has a section and a picture, taken in real Roam, for embeds and block links, property pages,
+  OKF bundles, and the section's search and filter.
+
 - External Vault References are drawn like Roam's Linked References. A line that links to the page is a
   Roam block with the headings and list items it sits under as a path above it; click a part of the path
   to open it in place, and click a line's caret to show the items nested under it. A note unfolded on the
@@ -43,6 +46,18 @@
 - A note opens in Roam's main window, drawn as a page: its name as the title and its outline under it. Back
   and Forward work as they do between pages. Shift-click opens it over the page instead (Roam's sidebar
   takes no windows from an extension).
+- OKF bundles are found by the `okf_version` in their `index.md`. In a bundle a note is named by its
+  `title`, `type` and `status` are page references (the page **Metric** lists the notes of that type),
+  and a link is read from the note's own folder first and, when it starts with `/`, from the bundle's.
+- A property's name is a page, as an attribute's name is in Roam: the page **author** lists every note
+  with an `author` property, and a `Name::` written in a note (as Roam's Markdown export writes one)
+  counts the same. Tags, aliases and `cssclasses` are left out: they are Roam's tags and aliases.
+- Reference-style Markdown links (`[text][ref]`, `[ref]: target.md`) are links: they count on the
+  page they name and are drawn as the link they stand for, with the lines that define them hidden.
+- The section's header has Linked References' search box and filter. A search shows the references
+  whose block or path has the words, written as they are in the note with the words in yellow, as Roam
+  shows them. The filter lists the pages the references link to; click one to keep only the references
+  that link to it, shift-click to hide them. The count reads "1 of 3 external vault references" meanwhile.
 - Notes in a folder named like the page. A vault kept by folder (one folder per project or area, named
   like its page in Roam) showed nothing on those pages unless a note linked back. Now every note inside a
   folder with the page's name, in any letter case and anywhere in the vault, is listed under External

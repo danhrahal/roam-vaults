@@ -415,6 +415,11 @@ export class VaultEngine {
     return this.idx.candidates(target, from).find((p) => MD.test(p)) ?? null;
   }
 
+  /** The file an embed names that is not a note (an image), resolved the same way. */
+  resolveFile(target: string, from: string): string | null {
+    return this.idx.candidates(target, from).find((p) => !MD.test(p)) ?? null;
+  }
+
   /** A note's text, from the few most recently read ones or from disk. */
   private async text(path: string): Promise<string | null> {
     let t = this.texts.get(path);

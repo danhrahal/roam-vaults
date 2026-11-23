@@ -106,3 +106,18 @@ test('a link keeps the heading or block it names, for the click', () => {
   root.kids.forEach(walk);
   assert.deepEqual(subs, ['#Proof', '#^fold', '#Proof', undefined]);
 });
+
+test('embeds: a picture of the vault is Roam\'s image, a note, heading or block starts as its link', () => {
+  const seen = (s: string) => { const root = new El('div'); inline(root as unknown as HTMLElement, s); return root.kids[0] as El; };
+  const one = (k: El): El => (k.kids[0] as El).kids[0] as El;
+  for (const [s, target, alt, width] of [['![[crumb.png]]', 'crumb.png', '', '500px'], ['![[pictures/crumb.PNG|300]]', 'pictures/crumb.PNG', '', '300px'], ['![open crumb](pictures/crumb%20one.png)', 'pictures/crumb one.png', 'open crumb', '500px'], ['![open crumb|120x80](crumb.jpg)', 'crumb.jpg', 'open crumb', '120px']] as const) {
+    const box = seen(s), i = one(box) as any;
+    assert.deepEqual([box.className, i.dataset.rvImg, i.alt, (box.style as any).width], ['rm-inline-img__resize hoverparent', target, alt, width], s);
+  }
+  // a picture on the web is not fetched: it stays a link, as before
+  assert.equal(seen('![x](https://example.com/a.png)').className, 'rm-alias rm-alias--external');
+  for (const [s, target, sub] of [['![[Proofing]]', 'Proofing', undefined], ['![[Proofing#Cold]]', 'Proofing', '#Cold'], ['![[Proofing#^cold]]', 'Proofing', '#^cold'], ['![[plan.pdf]]', 'plan.pdf', undefined]] as const) {
+    const box = seen(s);
+    assert.deepEqual([box.tag, box.dataset.rvEmbed, box.dataset.rvEmbedSub, box.textContent.startsWith('[[📎 ')], ['span', target, sub, true], s);
+  }
+});

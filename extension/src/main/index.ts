@@ -62,6 +62,7 @@ class Vault implements PanelVault {
     const viewer: ViewerActions = {
       read: (path) => this.call<string>('read', { path }),
       resolve: (target, from) => this.call<string | null>('resolve', { target, from }).catch(() => null),
+      image: (target, from) => this.call<Blob | null>('image', { target, from }).catch(() => null),
       openOutside: (path) => this.openOutside(path),
       openLabel: () => openLabel(openWith()),
       go: openInRoam,
@@ -381,7 +382,9 @@ async function inject() {
     for (const refs of refsEls) {
       const parent = refs.parentElement;
       if (!parent) continue;
-      const title = await titleFor(refs);
+      // a page embedded in a block and opened has its own references: they are that page's
+      const embedded = refs.closest('.rm-embed--page')?.querySelector(':scope > h3 .rm-page__title')?.textContent;
+      const title = embedded || await titleFor(refs);
       if (!title) continue;
       let panel = parent.querySelector<HTMLElement>(`:scope > .rv-panel[${ATTR}]`);
       if (panel && panel.dataset.title === title) { syncCounts(refs, panel); continue; }

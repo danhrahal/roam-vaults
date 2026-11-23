@@ -149,6 +149,16 @@ filter stays with the page while Roam is open.
 
 ![The section filtered to the lines that link to Blight](https://raw.githubusercontent.com/sweenzor/roam-vaults/3f53ab81eddfb7dde53776b7678dbd54a9a81e37/docs/images/filtered.png)
 
+### Notes in a folder named like the page
+
+A vault kept by folder often has no links back to the page: one folder per project or area, named like
+its page in Roam, with the notes inside. Those notes are listed too. Here the page is **Writing** and the
+vault has a folder `Areas/Writing`. Its five notes come after the notes that link to the page, the
+folder's own notes first and then the ones in its subfolder. Their titles read from the folder on, with
+only `Areas/` in grey:
+
+![The page Writing, listing the notes inside the folder Areas/Writing after the notes that link to it](https://raw.githubusercontent.com/sweenzor/roam-vaults/4718f94e72962cf3fcf99bbd61d2e68b976e9e32/docs/images/folder-notes.png)
+
 ### Notes with a similar name
 
 When no note is named after the page, the section suggests notes whose name is close to it, so a typo or

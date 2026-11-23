@@ -33,7 +33,7 @@ Roam has none, leave it out rather than invent UI.
 | Heading link `[[A#H]]` | Shows "A > H", scrolls to the heading | Reference to the heading block | The heading is dropped; opens at the top | Keep the heading; open the note at that block |
 | Block id `^id`, `[[A#^id]]` | The id is hidden; the link opens and flashes the block | Block reference `((uid))` | `^id` shows as text; the link shows `A#^id` | Draw as a Roam block reference with the block's text |
 | Embed `![[A]]`, `![[A#H]]`, `![[A#^id]]` | The note, section or block drawn in place | `{{embed}}` | A paper-clip link | Draw in place, lazily, with a depth limit |
-| Image and PDF embed | Image with a width; PDF viewer | Inline image; `{{pdf}}` | Not shown | A local image can be shown from the folder with no network |
+| Image and PDF embed | Image with a width; PDF viewer | Inline image; `{{pdf}}` | Not shown | Show local images inline, read from the folder (decided 2026-11-22) |
 | Tag, nested `#a/b` | Tag pane; a parent tag counts its children | A tag is a page; `a/b` is a namespace | The tag's page lists tagged notes, parents too | None |
 | Frontmatter `tags` | The list form only. A comma string makes no tags in 1.15.1 | Tags in a block | Comma and space strings are split into tags | Vaults lists notes Obsidian would not |
 | Properties | Typed widgets; links are clickable | Attributes `Name:: value`; the attribute's page lists every use | `key:: value` blocks with a clickable key | Values are raw YAML; no list of notes per property |

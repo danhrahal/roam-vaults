@@ -446,7 +446,7 @@ without running it:
 - Local REST API: https://github.com/coddingtonbear/obsidian-local-rest-api
 
 **OKF:**
-- Spec: https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
+- Spec: https://github.com/open-knowledge-format/open-knowledge-format/blob/main/SPEC.md
 - Announcement: https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing
 
 **Other formats:**

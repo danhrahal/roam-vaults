@@ -5,8 +5,10 @@ import { deleteNotes } from '../cache-db.ts';
 import { pickVaultFolder, ensurePermission } from './picker.ts';
 import { setScanMark, closeScanMark, unfinishedScans } from './scan-mark.ts';
 import { createSettingsPanel, scanProgress, COUNTS_SETTING, type SettingsVault } from './settings.ts';
-import { ATTR, installStyles, renderPanel, renderCounts, drawnRows, h, type Count, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type PanelVault, type ViewerActions } from './ui.ts';
+import { ATTR, installStyles, renderPanel, renderCounts, drawnRows, h, type Count, notify, removeToast, openViewer, closeViewer, type SectionState, type SectionActions, type Where, type PanelVault, type ViewerActions } from './ui.ts';
 import type { PageResult, Backlink } from '../engine.ts';
+import { followBrackets } from './brackets.ts';
+import { putLine, type LineRead } from '../core/outline.ts';
 import { OPEN_WITH_SETTING, openLink, openLabel } from './open-with.ts';
 import { SQL_DIR, poolName } from '../sql/pool-name.ts';
 import { shareName } from '../share.ts';
@@ -62,6 +64,7 @@ class Vault implements PanelVault {
       resolve: (target, from) => this.call<string | null>('resolve', { target, from }).catch(() => null),
       openOutside: (path) => this.openOutside(path),
       openLabel: () => openLabel(openWith()),
+      go: openInRoam,
     };
     this.act = {
       ...viewer,
@@ -154,9 +157,9 @@ class Vault implements PanelVault {
   async lines(notes: Backlink[]) {
     const need = notes.filter((b) => b.unread);
     if (!need.length) return;
-    const texts = await this.call<(string[] | null)[]>('lines', { items: need.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })) });
+    const texts = await this.call<(LineRead[] | null)[]>('lines', { items: need.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })) });
     need.forEach((b, i) => {
-      texts[i]?.forEach((t, j) => { if (b.lines[j]) b.lines[j].text = t; });
+      texts[i]?.forEach((t, j) => { if (b.lines[j]) putLine(b.lines[j], t); });
       delete b.unread;
     });
   }
@@ -355,6 +358,19 @@ function syncAllCounts() {
   });
 }
 
+/** Open the page with this title in Roam: in the main window, or in the right sidebar as its
+ *  outline, its linked references or its graph. False when the graph has no such page (a click must
+ *  not make one). */
+function openInRoam(title: string, where: Where): boolean {
+  const api = window.roamAlphaAPI;
+  let uid: string | undefined;
+  try { uid = api.pull('[:block/uid]', [':node/title', title])?.[':block/uid']; } catch { return false; }
+  if (!uid) return false;
+  if (where === 'main') api.ui.mainWindow.openPage({ page: { uid } });
+  else api.ui.rightSidebar.addWindow({ window: { type: where, 'block-uid': uid } });
+  return true;
+}
+
 let scanning = false, scanAgain = false;
 async function inject() {
   if (!vaults.length) return; // nothing to show, so no work on page changes
@@ -392,6 +408,7 @@ let loads = 0; // goes up on every load and unload, so a load still in progress 
 async function onload({ extensionAPI }: { extensionAPI: any }) {
   const load = ++loads;
   cleanups.push(installStyles());
+  cleanups.push(followBrackets());
   settingsAPI = extensionAPI?.settings;
   try { showCounts = settingsAPI?.get?.(COUNTS_SETTING) === true; } catch { showCounts = false; }
   workerUrl = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));

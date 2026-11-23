@@ -163,7 +163,7 @@ test('snippets come from the right line, and note text is read once while it sta
   assert.equal(fs.reads(), reads, 'a second look at the same page reads nothing');
   fs.write('One.md', 'moved\n[[Target]] down a line');
   await e.refresh(['One.md']);
-  assert.deepEqual((await lines())['One.md'], [[1, '[[Target]] down a line']]);
+  assert.deepEqual((await lines())['One.md'], [[1, 'moved [[Target]] down a line']]);
 });
 
 test('a page many notes link to keeps a bounded amount of note text', async () => {
@@ -175,7 +175,7 @@ test('a page many notes link to keeps a bounded amount of note text', async () =
   await e.build();
   const r = await e.query('Hub');
   assert.equal(r.backlinks.length, 151);
-  assert.ok(r.backlinks.every((b) => b.lines[0].text.startsWith('[[Hub]]')));
+  assert.ok(r.backlinks.every((b) => b.lines[0].text.startsWith('[[Hub]]')), 'the line with the link is the text, also where its paragraph is too long to show');
   const kept = (e as any).texts as Map<string, string>;
   const chars = [...kept.values()].reduce((a, t) => a + t.length, 0);
   assert.ok(chars <= 1_000_000 && chars === (e as any).textChars, `kept ${chars} characters`);
@@ -196,7 +196,7 @@ test('a page asks for the lines of the notes it draws first, and for the rest wh
   assert.ok(r.backlinks.slice(60).every((b) => b.unread && b.lines[0].line === 1 && b.lines[0].text === ''));
   const rest = r.backlinks.slice(60, 100);
   const texts = await e.lines([...rest.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) })), { path: 'gone.md', lines: [0] }]);
-  assert.deepEqual(texts, [...rest.map((_, i) => [`[[Hub]] from ${60 + i}`]), null]);
+  assert.deepEqual(texts.map((t) => t && t.map((l) => l.text)), [...rest.map((_, i) => [`[[Hub]] from ${60 + i}`]), null]);
   assert.equal(fs.reads() - before, 101, 'the notes asked for, and a try at the one that is gone');
   const all = await e.query('Hub');
   assert.ok(all.backlinks.every((b) => !b.unread && b.lines[0].text.startsWith('[[Hub]] from')), 'asked for whole, a page comes whole');

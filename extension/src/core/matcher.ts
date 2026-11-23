@@ -82,11 +82,21 @@ export class RoamMatcher {
     const put = (p: string, how: NoteHow) => { if (!notes.has(p)) notes.set(p, how); };
 
     // (a)(b)(f) name / case / namespace-path tiers come straight from the resolver
+    // index.md and log.md in every folder (an OKF bundle) describe their folders and are no notes
+    // of their own: a page called Index or Log is none of them
+    const reserved = /^(index|log)$/i.test(t) && idx.pathsNamed(nfcLower(t)).length > 1;
     if (!/[\[\]|#^]/.test(t)) {
-      for (const p of idx.candidates(t, '')) {
+      if (!reserved) for (const p of idx.candidates(t, '')) {
         if (!/\.md$/i.test(p)) continue;
         const base = p.slice(p.lastIndexOf('/') + 1, -3);
         put(p, t.includes('/') ? 'path' : base === t ? 'exact' : 'case');
+      }
+      // a folder's index.md is the note for the page named like the folder: Recipes <-> Recipes/index.md
+      for (const p of idx.pathsNamed('index')) {
+        if (!/\.md$/i.test(p)) continue;
+        const dir = nfcLower(p.slice(0, Math.max(0, p.lastIndexOf('/'))));
+        const want = nfcLower(t);
+        if (dir && (dir === want || (!want.includes('/') && dir.endsWith('/' + want)))) put(p, 'path');
       }
     }
     // (c) aliases
@@ -99,8 +109,8 @@ export class RoamMatcher {
       for (const p of idx.pathsNamed(nfcLower(t.split('/').join(sep)))) if (/\.md$/i.test(p)) put(p, 'ns-flat');
     }
     // sanitized (illegal chars) tier
-    if (this.opts.sanitized !== false) for (const p of idx.keyPaths('s:' + sanitizedKey(t))) put(p, 'sanitized');
-    if (this.opts.loose) for (const p of idx.keyPaths('l:' + looseKey(t))) put(p, 'loose');
+    if (this.opts.sanitized !== false && !reserved) for (const p of idx.keyPaths('s:' + sanitizedKey(t))) put(p, 'sanitized');
+    if (this.opts.loose && !reserved) for (const p of idx.keyPaths('l:' + looseKey(t))) put(p, 'loose');
 
     // (d) notes that link to it: backlinks of every matched note + unresolved links by text
     const links: LinkMatch[] = [];
@@ -112,7 +122,10 @@ export class RoamMatcher {
       for (const h of idx.unresolved(key)) links.push({ src: h.src, line: h.line, embed: h.embed, resolvedTo: null, via });
     };
     byText(linkKey(t), 'unresolved');
-    if (iso) for (const f of this.opts.dailyFormats) byText(linkKey(formatIso(iso, f)), 'daily-unresolved');
+    if (iso) {
+      for (const f of this.opts.dailyFormats) byText(linkKey(formatIso(iso, f)), 'daily-unresolved');
+      byText(linkKey(iso), 'daily-unresolved'); // the date as OKF writes it, whatever the vault's format
+    }
 
     // tags: Roam treats #tag and [[tag]] as the same page
     const tagged: { path: string; tag: string }[] = [];

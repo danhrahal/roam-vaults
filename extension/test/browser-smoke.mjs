@@ -8,7 +8,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 
 const dist = path.resolve(import.meta.dirname, '../dist');
 const page = `<!doctype html><meta charset=utf-8><title>fake roam</title>
-<style>body{font:14px system-ui;margin:0}.roam-article{max-width:720px;margin:24px auto}.rm-caret{display:inline-block;width:16px;text-align:center;color:#8a9ba8}.rm-caret-open::before{content:'▾'}.rm-caret-closed::before{content:'▸'}.flex-h-box{display:flex}</style><!-- stand-ins for Roam's caret styles -->
+<style>body{font:14px system-ui;margin:0}.roam-article{max-width:720px;margin:24px auto}.rm-caret{display:inline-block;width:16px;text-align:center;color:#8a9ba8}.rm-caret-open::before{content:'▾'}.rm-caret-closed::before{content:'▸'}.flex-h-box{display:flex}.rm-ref-page-view{margin:4px 0 0 4px}.rm-bullet{display:inline-block;width:13px;height:13px}.rm-bullet__inner{display:block;width:5px;height:5px;border-radius:50%;background:#8a9ba8;margin:4px}.rm-ref-page-view-title{font-size:16px;line-height:24px}</style><!-- stand-ins for Roam's caret and reference group styles -->
 <div class="roam-article"><div class="rm-title-display-container"><h1 class="rm-title-display">Project Alpha</h1></div>
 <div class="rm-block-children"><div>• Kickoff notes</div></div>
 <div><div class="rm-reference-main"><div class="rm-reference-main__child-wrapper"><div class="rm-reference-container"><div class="flex-h-box"><div><strong>1 Linked References</strong></div></div></div><div class="rm-unlinked-reference-container"><div class="flex-h-box"><strong>Unlinked References</strong></div></div></div></div></div></div>`;
@@ -100,10 +100,10 @@ const checks = [];
 const ok = (name, cond) => { checks.push([name, !!cond]); };
 const t1 = await text();
 ok('counterpart shown first, with its vault path as a namespaced title', (await p.locator('.rv-note').first().textContent()) === 'Projects/Project Alpha');
-ok('lines use Roam reference-item styling', (await p.locator('.rv-block.rm-reference-item').count()) > 0);
+ok('lines use Roam reference-item styling', (await p.locator('.rv-panel .rm-reference-item .roam-block-container').count()) > 0);
 ok('no Open in Obsidian link on the page itself', !(await p.locator('.rv-panel').textContent()).includes('Open in Obsidian'));
 ok('backlink snippet shown', t1.includes('see [[Project Alpha]] for context'));
-ok('wikilinks keep faint brackets like Roam', (await p.locator('.rv-block .rv-br').count()) > 0 && (await p.locator('.rv-block', { hasText: 'the alpha project' }).locator('.rv-br').count()) === 0);
+ok('wikilinks keep faint brackets like Roam', (await p.locator('.rv-panel .rm-block-text .rm-page-ref__brackets').count()) > 0 && (await p.locator('.rv-panel .rm-block-text', { hasText: 'the alpha project' }).locator('.rm-page-ref__brackets').count()) === 0);
 ok('daily backlink shown', t1.includes('2026-11-09'));
 ok('a note whose name is not NFC on disk is read for its lines', t1.includes('R\u00e9sum\u00e9s/2026/Q4/Caf\u00e9 plan') && t1.includes('booked for [[Project Alpha]] in Lyon'));
 ok('no palette commands', (await p.evaluate(() => window.__cmds.length)) === 0);
@@ -133,8 +133,8 @@ ok('header uses Roam wording, no vault prefix with one vault', t1.includes('4 Ex
 ok('counterpart folded by default', await p.locator('.rv-group').first().locator('.rv-content').evaluate((e) => e.hidden));
 await p.locator('.rv-group-caret').first().click();
 await p.waitForFunction(() => document.querySelector('.rv-preview')?.textContent.includes('Kickoff with'), null, { timeout: 5000 });
-ok('unfold shows the note inline', await p.locator('.rv-preview').evaluate((e) => !e.hidden && !!e.querySelector('h2')));
-await p.locator('.rv-preview .rv-wl', { hasText: 'Hiring neural' }).click();
+ok('unfold shows the note inline', await p.locator('.rv-preview').evaluate((e) => !e.hidden && !!e.querySelector('.rm-heading-level-1')));
+await p.locator('.rv-preview [data-rv-target]', { hasText: 'Hiring neural' }).click();
 await p.waitForSelector('.rv-viewer');
 ok('link in unfolded note opens viewer', (await p.locator('.rv-viewer h3').textContent()) === 'Hiring neural');
 await p.keyboard.press('Escape');
@@ -153,7 +153,7 @@ ok('unfolded note stays open after live update', await p.locator('.rv-preview').
 // (the viewer is squeezed so the note scrolls and the highlighted line starts out of view; Roam's
 // own styles let the title and path rows shrink, which min-height:0 stands in for here)
 await p.addStyleTag({ content: '.rv-viewer{max-height:130px}.rv-viewer>*{min-height:0}' });
-await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
+await p.locator('.rv-panel .rm-block-main', { hasText: 'see [[Project Alpha]]' }).locator('.rm-bullet').click();
 await p.waitForSelector('.rv-viewer .rv-hl');
 ok('viewer highlights line', (await p.locator('.rv-viewer .rv-hl').textContent()).includes('see'));
 ok('viewer opens at the top of the note', await p.locator('.rv-viewer > .rv-viewer-body').evaluate((e) => e.scrollHeight > e.clientHeight && e.scrollTop === 0));
@@ -167,7 +167,7 @@ await openBtn().click();
 ok('Open in Obsidian opens an obsidian:// link', (await p.evaluate(() => window.__opened.pop())) === 'obsidian://open?vault=My%20Vault&file=Zettel%2FHiring%20neural');
 await p.keyboard.press('Escape');
 await p.evaluate(() => { window.__openWith = 'vscode://file/Users/me/Notes/{vault}/{file}'; });
-await p.locator('.rv-block', { hasText: 'see [[Project Alpha]]' }).click();
+await p.locator('.rv-panel .rm-block-main', { hasText: 'see [[Project Alpha]]' }).locator('.rm-bullet').click();
 await p.waitForSelector('.rv-viewer .rv-hl');
 ok('with "Open notes with" set, the button reads Open in editor', (await openBtn().textContent()) === 'Open in editor');
 await openBtn().click();
@@ -514,7 +514,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   await press(q, 'Add vault folder');
   await q.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('Linker 000'), null, { timeout: 15000 });
   const blocks = () => q.evaluate(() => [...document.querySelectorAll('.rv-group')].filter((g) => /^Linker \d+$/.test(g.querySelector('.rv-note').textContent))
-    .map((g) => g.querySelector('.rv-block-text')?.textContent ?? null));
+    .map((g) => g.querySelector('.rm-block-text')?.textContent ?? null));
   const first = await blocks();
   ok('the first linking notes come with their lines', first.length > 40 && first.length <= 60 && (await q.locator('.rv-group').count()) === 60 && first.every((t, i) => t === `line of linker ${i} [[Project Alpha]]`));
   let n = await q.locator('.rv-group').count();
@@ -533,7 +533,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
     const w = await (await vault.getFileHandle('Linker 000.md', { create: true })).createWritable();
     await w.write('- line of linker 0, edited [[Project Alpha]]\n'); await w.close();
     window.__empty = 0;
-    new MutationObserver(() => { window.__empty += [...document.querySelectorAll('.rv-group .rv-block-text')].filter((b) => !b.textContent).length; })
+    new MutationObserver(() => { window.__empty += [...document.querySelectorAll('.rv-group .rm-block-text')].filter((b) => !b.textContent).length; })
       .observe(document.querySelector('.roam-article'), { childList: true, subtree: true });
   });
   await q.waitForFunction(() => document.querySelector('.rv-panel')?.textContent.includes('line of linker 0, edited'), null, { timeout: 5000 }).catch(() => {});
@@ -587,7 +587,7 @@ const rowHas = (q, text) => q.waitForFunction((text) => document.querySelector('
   ok('a change in the vault shows in both windows', await shown(a, 'a later line about') && await shown(b, 'a later line about') && await rowHas(b, 'My Vault2 notes'));
   ok('a scan the other window runs is not taken for one that did not finish, and its mark is left alone', !(await row(b)).includes("didn't finish")
     && await b.evaluate(() => localStorage.getItem('roam-vaults:scanning:My Vault')) === 'set-by-the-first-window');
-  await b.locator('.rv-block', { hasText: 'a later line about' }).click();
+  await b.locator('.rv-panel .rm-block-main', { hasText: 'a later line about' }).locator('.rm-bullet').click();
   ok('a note opens in the second window', await b.waitForSelector('.rv-viewer .rv-hl', { timeout: 5000 }).then(() => true, () => false) && (await b.locator('.rv-viewer .rv-hl').textContent()).includes('a later line about'));
   await b.keyboard.press('Escape');
   await press(b, 'Rescan');

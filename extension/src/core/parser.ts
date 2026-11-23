@@ -202,6 +202,14 @@ function parseMdDest(dest: string): { target: string; subpath: string; flags: nu
   return { target: intern(path.normalize('NFC')), subpath: subpath && intern(subpath), flags };
 }
 
+/** A note's `title` property names it, as an alias does: in OKF it is the note's name, and the
+ *  file name is only a slug of it ("country-sourdough.md", title "Country Sourdough Loaf"). */
+function withTitle(aliases: string[], props: Record<string, string | string[]> | null, path: string): string[] {
+  const t = props && typeof props.title === 'string' ? props.title.trim().replace(/^(["'])(.*)\1$/, '$2').normalize('NFC') : '';
+  if (!t || t.toLowerCase() === basenameNoMd(path).toLowerCase() || aliases.includes(t)) return aliases;
+  return [...aliases, t];
+}
+
 export function basenameNoMd(path: string): string {
   const slash = path.lastIndexOf('/');
   const b = slash < 0 ? path : path.slice(slash + 1);
@@ -280,6 +288,13 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
     const raw = text.slice(m.index + m[0].length - m[2].length, m.index + m[0].length);
     headings.push({ level: m[1].length, text: detach(raw.replace(/\r$/, '').replace(/[ \t]+#+[ \t]*$/, '').trim()), line: lineOf(starts, m.index) });
   }
+  // An OKF log (log.md) is a list of entries under a heading per day, "## 2026-11-21": each day's
+  // entries are a reference to that day, as a block on a daily page is in Roam.
+  if (/(^|\/)log\.md$/i.test(path)) {
+    for (const h of headings) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(h.text)) links.push({ kind: 'wiki', embed: false, target: h.text, subpath: '', display: null, line: h.line, col: 0, flags: 0 });
+    }
+  }
   const blockIds: string[] = [];
   RE_BLOCKID.lastIndex = fm.bodyStart;
   while ((m = RE_BLOCKID.exec(masked))) {
@@ -290,7 +305,7 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
   return {
     path,
     title: basenameNoMd(path),
-    aliases: extractAliases(fm.props),
+    aliases: withTitle(extractAliases(fm.props), fm.props, path),
     tags: [...tagSet],
     links, headings, blockIds,
     props: fm.props,

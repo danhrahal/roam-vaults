@@ -59,6 +59,8 @@ const FILES = {
   'Rota.md': '- [[Focaccia]] goes in after ((the cold proof))\n- [[Focaccia]] timing: see [[Proofing#Cold]]\n'.replace('((the cold proof))', '[[Proofing#^cold]]'),
   // embeds: a block, a heading with what is under it, a whole note, and a picture kept in the vault
   'Embeds.md': '- [[Ciabatta]] block ![[Proofing#^cold]]\n- [[Ciabatta]] heading ![[Proofing#Warm]]\n- [[Ciabatta]] note ![[Proofing]]\n- [[Ciabatta]] crumb ![open crumb](pictures/crumb.png)\n',
+  // a property that links: Roam's attribute block
+  'Rye notes.md': '---\nrelated: "[[Ciabatta]]"\ntags: [bread, rye]\n---\nDense crumb.\n',
   'pictures/crumb.png': picture(),
   'Wholesale.md': exported(PAGES.Wholesale), 'Days/2026/July 9th, 2026.md': exported(PAGES['July 9th, 2026']), 'Sourdough.md': exported(PAGES[PAGE]) };
 
@@ -94,6 +96,8 @@ await page.evaluate(async ({ PAGES, COLD }) => {
   await api.createBlock({ location: { 'parent-uid': 'rvhgwarm0', order: 0 }, block: { string: 'two hours at 26°', uid: 'rvhgwarm1' } });
   await api.createBlock({ location: { 'parent-uid': 'rvhgproof', order: 1 }, block: { string: 'Cold', uid: 'rvhgcold0', heading: 2, open: true } });
   await api.createBlock({ location: { 'parent-uid': 'rvhgcold0', order: 0 }, block: { string: COLD, uid: 'rvhgcold1' } });
+  await api.createPage({ page: { title: 'Rye notes', uid: 'rvhgryeno' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgryeno', order: 0 }, block: { string: 'related:: [[Ciabatta]]', uid: 'rvhgryen1' } });
   await api.createPage({ page: { title: 'Embeds', uid: 'rvhgembed' } });
   for (const [i, string] of ['[[Ciabatta]] block {{[[embed]]: ((rvhgcold1))}}', '[[Ciabatta]] heading {{[[embed]]: ((rvhgwarm0))}}', '[[Ciabatta]] note {{[[embed]]: [[Proofing]]}}', '[[Ciabatta]] crumb ![open crumb](https://example.com/pictures/crumb.png)'].entries())
     await api.createBlock({ location: { 'parent-uid': 'rvhgembed', order: i }, block: { string, uid: 'rvhgembe' + i } });

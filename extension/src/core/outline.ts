@@ -3,6 +3,7 @@
 // of parent blocks, the block, its children. In Markdown a block is a list item ("- text", with the
 // lines that continue it), nested by indentation, as Roam, Logseq and Obsidian's outliners write it;
 // a heading is a parent of what follows it, up to the next heading of its level. No Node APIs.
+import { isoToRoamDaily } from './dates.ts';
 
 export interface OutlineBlock {
   /** The block's text without its list marker; the lines of a block of several lines, joined by \n. */
@@ -85,7 +86,18 @@ const clip = (s: string) => (s.length > MAX_BLOCK ? s.slice(0, MAX_BLOCK - 1) + 
  *  line of a block's code) gives the block it belongs to, or itself. */
 export function contextOf(text: string, lines: number[]): LineContext[] {
   const r = rows(text);
-  return lines.map((n) => context(r, Math.max(0, Math.min(n, r.length - 1))));
+  let props: ReturnType<typeof propsOf> | undefined;
+  return lines.map((n) => {
+    // a line of the frontmatter: its property, as the attribute block Roam would have for it
+    if (n > 0 && r[n]?.indent === -1 && r[0]?.indent === -1 && (props ??= propsOf(text.split('\n'))).end > n) {
+      for (const p of props.blocks) {
+        if (p.line === n) return { ...p, up: [] };
+        const kid = p.kids.find((k) => k.line === n);
+        if (kid) return { ...kid, up: [{ text: p.text, line: p.line }] };
+      }
+    }
+    return context(r, Math.max(0, Math.min(n, r.length - 1)));
+  });
 }
 
 /** The first line of the block a line is in. */
@@ -273,6 +285,54 @@ function sectionEnd(r: Row[], n: number): number {
   return i;
 }
 
+// ---------- properties ----------
+const unquote = (s: string) => s.replace(/^(["'])(.*)\1$/, '$2');
+/** A value that is a path to a note, as OKF writes a relation: "../recipes/rye.md", "notes/a.md#part". */
+export const RE_NOTE_PATH = /^(?:\.{1,2}\/|\/)?[^\s"'[\]|:#]+\.md(?:#\S+)?$/i;
+const RE_TAG_VALUE = /^#?[\p{L}\p{N}_/-]+$/u;
+
+/** One value of a property as Roam would hold it in an attribute: without YAML's quotes, a tag as a
+ *  tag, a date as a link to that day's page, a path to a note as a link to it. */
+function propOne(key: string, raw: string): string {
+  const v = unquote(raw.trim());
+  if (!v) return '';
+  if (/^tags?$/i.test(key)) return RE_TAG_VALUE.test(v) && !/^\d+$/.test(v) ? '#' + v.replace(/^#/, '') : v;
+  const day = isoToRoamDaily(v);
+  if (day) return `[[${day}]]`;
+  if (RE_NOTE_PATH.test(v)) return `[${v}](${v})`;
+  return v;
+}
+/** A property's value: one value, or a list written on one line (`[a, b]`). */
+export function propValue(key: string, raw: string): string {
+  const v = raw.trim();
+  const list = /^\[(.*)\]$/.exec(v);
+  if (list && !v.startsWith('[[')) return list[1].split(',').map((x) => propOne(key, x)).filter(Boolean).join(/^tags?$/i.test(key) ? ' ' : ', ');
+  return propOne(key, v);
+}
+/** The properties of a note's frontmatter as attribute blocks ("name:: value"), a list or a map
+ *  under a name as blocks under it. `end`: the line that closes the frontmatter, -1 without one. */
+function propsOf(lines: string[]): { blocks: OutlineBlock[]; end: number } {
+  const blocks: OutlineBlock[] = [];
+  if (lines[0]?.replace(/\r$/, '') !== '---') return { blocks, end: -1 };
+  const end = lines.findIndex((l, k) => k > 0 && /^(---|\.\.\.)\s*$/.test(l));
+  if (end < 0) return { blocks, end: -1 };
+  let prop: OutlineBlock | null = null, key = '';
+  for (let i = 1; i < end; i++) {
+    const l = lines[i].replace(/\r$/, '');
+    const m = /^([^\s:#-][^:]*?)\s*:(?:\s+(.*))?$/.exec(l);
+    if (m) {
+      key = unquote(m[1]);
+      const value = m[2] ? propValue(key, m[2]) : '';
+      blocks.push(prop = { text: `${key}::${value ? ' ' + value : ''}`, line: i, kids: [] });
+    } else if (prop && l.trim()) {
+      const item = l.trim().replace(/^-\s+/, '');
+      const pair = /^([\w][\w .-]*?):\s+(.*)$/.exec(item); // a map in a list: "resource: notes/a.md"
+      prop.kids.push({ text: pair ? `${pair[1]}: ${propValue(pair[1], pair[2])}` : propValue(key, item), line: i, kids: [] });
+    }
+  }
+  return { blocks, end };
+}
+
 /** A whole note as an outline, the way Roam would hold it as a page: each property of its
  *  frontmatter an attribute block ("name:: value"), each heading a block with what follows it under
  *  it (a heading block's text keeps its #s), each list item a block nested by its indentation, each
@@ -281,17 +341,9 @@ export function outlineOf(text: string): OutlineBlock[] {
   const r = rows(text);
   const root: OutlineBlock = { text: '', line: -1, kids: [] };
   const lines = text.split('\n');
-  let i = 0;
-  if (lines[0]?.replace(/\r$/, '') === '---' && r[0]?.kind === 'blank') {
-    let prop: OutlineBlock | null = null;
-    for (i = 1; i < r.length && !/^(---|\.\.\.)\s*$/.test(lines[i]); i++) {
-      const l = lines[i].replace(/\r$/, '');
-      const m = /^([^\s:#-][^:]*?)\s*:(?:\s+(.*))?$/.exec(l);
-      if (m) { prop = { text: `${m[1].replace(/^["']|["']$/g, '')}::${m[2] ? ' ' + m[2] : ''}`, line: i, kids: [] }; root.kids.push(prop); }
-      else if (prop && l.trim()) prop.kids.push({ text: l.trim().replace(/^-\s+/, ''), line: i, kids: [] });
-    }
-    i++;
-  }
+  const props = propsOf(lines);
+  root.kids.push(...props.blocks);
+  const i = props.end + 1;
   fill(r, i, r.length, root, { n: Infinity });
   return root.kids;
 }

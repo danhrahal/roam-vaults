@@ -95,8 +95,8 @@ test('a whole note becomes an outline: properties, headings with what follows th
     '## Notes', 'last words',
   ].join('\n');
   assert.deepEqual(outlineOf(note).map(tree), [
-    'aliases:: [Levain]',
-    ['tags::', ['bread', 'starter']],
+    'aliases:: Levain',
+    ['tags::', ['#bread', '#starter']],
     ['# Sourdough', [
       'A wild yeast bread. Second line of the paragraph.',
       ['## Method', [['Mix', [['flour and [[Water]]', ['75% hydration']]]], 'Fold', '```\n- not a block\n```', '> a quote\n> of two lines']],
@@ -141,4 +141,18 @@ test('the line a link names: a heading by its text, a block by its id', () => {
   assert.equal(lineOfSub(note, '#Shape'), undefined);
   assert.equal(lineOfSub(note, '#^fol'), undefined);
   assert.equal(lineOfSub(note, '#'), undefined);
+});
+
+test('properties are attributes as Roam would hold them: no quotes, tags, dates as days, paths as links', () => {
+  const note = ['---', 'title: "Dark rye"', 'tags: [bread, rye]', 'baked: 2026-11-09', 'related: "[[Sourdough]]"', 'superseded_by: ../recipes/rye-2.md',
+    'sources:', '  - resource: notes/flour.md', '    note: \'from the mill\'', '  - "[[Mill]]"', 'servings: 12', 'draft: true', '---', 'Body.'].join('\n');
+  assert.deepEqual(outlineOf(note).map(tree), [
+    'title:: Dark rye', 'tags:: #bread #rye', 'baked:: [[November 9th, 2026]]', 'related:: [[Sourdough]]', 'superseded_by:: [../recipes/rye-2.md](../recipes/rye-2.md)',
+    ['sources::', ['resource: [notes/flour.md](notes/flour.md)', 'note: from the mill', '[[Mill]]']], 'servings:: 12', 'draft:: true', 'Body.',
+  ]);
+  // a line of the frontmatter that links: its attribute block, a value in a list under its property
+  const [rel, src, body] = contextOf(note, [4, 7, 13]);
+  assert.deepEqual([rel.text, rel.up], ['related:: [[Sourdough]]', []]);
+  assert.deepEqual([src.text, src.up], ['resource: [notes/flour.md](notes/flour.md)', [{ text: 'sources::', line: 6 }]]);
+  assert.equal(body.text, 'Body.');
 });

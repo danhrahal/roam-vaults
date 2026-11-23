@@ -386,3 +386,14 @@ test('an embedded picture is found the way a link is, and is never a note', asyn
   assert.equal(e.resolveFile('crumb', 'A.md'), null);
   assert.equal(e.resolveFile('missing.png', 'A.md'), null);
 });
+
+test('a date in a property is a reference on that day, a path in a property a link to that note', async () => {
+  const e = await fresh(memFS({
+    'recipes/rye.md': '---\nbaked: 2026-11-09\nsuperseded_by: rye-2.md\nsources:\n  - resource: ../notes/flour.md\n---\nOld rye.\n',
+    'recipes/rye-2.md': 'New rye.\n', 'notes/flour.md': 'Flour.\n',
+  }));
+  const lines = async (title: string) => { const r = await e.query(title); await e.lines(r.backlinks.map((b) => ({ path: b.path, lines: b.lines.map((l) => l.line) }))).then((t) => r.backlinks.forEach((b, i) => t[i]?.forEach((x, j) => { b.lines[j].text = x.text; }))); return r.backlinks.map((b) => [b.path, b.lines.map((l) => l.text)]); };
+  assert.deepEqual(await lines('November 9th, 2026'), [['recipes/rye.md', ['baked:: [[November 9th, 2026]]']]]);
+  assert.deepEqual(await lines('rye-2'), [['recipes/rye.md', ['superseded_by:: [rye-2.md](rye-2.md)']]]);
+  assert.deepEqual(await lines('flour'), [['recipes/rye.md', ['resource: [../notes/flour.md](../notes/flour.md)']]]);
+});

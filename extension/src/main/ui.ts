@@ -479,7 +479,8 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
   // The Portal resolves paths against the Dropbox folder: a vault that is that folder adds nothing,
   // a vault inside it (a Hub folder such as NE) adds its name.
   const inDropbox = (v: PanelVault, path: string) => (v.name === 'Dropbox' ? path : `${v.name}/${path}`);
-  const portal = (v: PanelVault, path: string) => `rahalos://vault/${inDropbox(v, path).split('/').map(encodeURIComponent).join('/')}`;
+  // `vault` shows a path in the Finder; `open` opens a document in its default app (Typora, Preview).
+  const portal = (v: PanelVault, path: string, verb: 'vault' | 'open' = 'vault') => `rahalos://${verb}/${inDropbox(v, path).split('/').map(encodeURIComponent).join('/')}`;
   const HUBS = /^(PR|LX|DD|NE|OW)$/;
   const icon = (svg: string) => { const e = h('span', { class: 'rv-tl-ic' }); e.innerHTML = svg; return e; };
   const DOC = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>';
@@ -495,8 +496,8 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
   const heading = (text: string, n: number) =>
     h('div', { class: 'rv-tl-grp' }, h('span', {}, text), h('span', { class: 'rv-tl-n' }, String(n)));
   const fileRow = (v: PanelVault, f: Item) => {
-    const tip = `${inDropbox(v, f.path)} — mostrar no Finder`;
-    return h('div', { class: 'rv-tl-file', title: tip, 'aria-label': tip, onclick: () => go(portal(v, f.path)) },
+    const tip = `${inDropbox(v, f.path)} — clique para abrir, ⌥ clique para mostrar no Finder`;
+    return h('div', { class: 'rv-tl-file', title: tip, 'aria-label': tip, onclick: (e: MouseEvent) => go(portal(v, f.path, e.altKey ? 'vault' : 'open')) },
       h('span', { class: 'rv-tl-ic' }, h('span', { class: 'rv-tl-ext' + (f.ext === 'pdf' ? ' rv-tl-pdf' : '') }, f.ext.toUpperCase().slice(0, 4) || 'ARQ')),
       h('span', { class: 'rv-tl-name' }, f.label));
   };
@@ -515,10 +516,11 @@ function resultBody(panel: HTMLElement, list: { v: PanelVault; r: PageResult }[]
       if (groupOpen.size > 500) groupOpen.delete(groupOpen.keys().next().value!);
       set(open);
     };
-    const tip = `${inDropbox(v, f.path)} — clique para ver aqui, duplo clique para abrir`;
+    const tip = `${inDropbox(v, f.path)} — clique para ver aqui, duplo clique para abrir no Typora, ⌥ clique para mostrar no Finder`;
     row.setAttribute('title', tip); row.setAttribute('aria-label', tip);
-    row.addEventListener('click', toggle);
-    row.addEventListener('dblclick', (e) => { e.preventDefault(); v.act.view(f.path, undefined, e.shiftKey); });
+    row.addEventListener('click', (e) => (e.altKey ? go(portal(v, f.path)) : toggle()));
+    // The two clicks of a double click open and close the preview again; the double click opens the note.
+    row.addEventListener('dblclick', (e) => { e.preventDefault(); go(portal(v, f.path, 'open')); });
     row.append(icon(DOC), h('span', { class: 'rv-tl-name' }, f.label));
     if (tag) row.append(h('span', { class: 'rv-tagref' }, `#${tag}`));
     set(groupOpen.get(k) ?? false);

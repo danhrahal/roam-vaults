@@ -1551,7 +1551,7 @@ ${path}`;
   const dirOrder = (a, b) => +a.startsWith("_ARCHIVE") - +b.startsWith("_ARCHIVE") || a.localeCompare(b);
   const MONTHS2 = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
   const inDropbox = (v, path) => v.name === "Dropbox" ? path : `${v.name}/${path}`;
-  const portal = (v, path) => `rahalos://vault/${inDropbox(v, path).split("/").map(encodeURIComponent).join("/")}`;
+  const portal = (v, path, verb = "vault") => `rahalos://${verb}/${inDropbox(v, path).split("/").map(encodeURIComponent).join("/")}`;
   const HUBS = /^(PR|LX|DD|NE|OW)$/;
   const icon = (svg) => {
     const e = h("span", { class: "rv-tl-ic" });
@@ -1575,10 +1575,10 @@ ${path}`;
   };
   const heading = (text, n) => h("div", { class: "rv-tl-grp" }, h("span", {}, text), h("span", { class: "rv-tl-n" }, String(n)));
   const fileRow = (v, f) => {
-    const tip = `${inDropbox(v, f.path)} \u2014 mostrar no Finder`;
+    const tip = `${inDropbox(v, f.path)} \u2014 clique para abrir, \u2325 clique para mostrar no Finder`;
     return h(
       "div",
-      { class: "rv-tl-file", title: tip, "aria-label": tip, onclick: () => go(portal(v, f.path)) },
+      { class: "rv-tl-file", title: tip, "aria-label": tip, onclick: (e) => go(portal(v, f.path, e.altKey ? "vault" : "open")) },
       h("span", { class: "rv-tl-ic" }, h("span", { class: "rv-tl-ext" + (f.ext === "pdf" ? " rv-tl-pdf" : "") }, f.ext.toUpperCase().slice(0, 4) || "ARQ")),
       h("span", { class: "rv-tl-name" }, f.label)
     );
@@ -1601,13 +1601,13 @@ ${f.path}`;
       if (groupOpen.size > 500) groupOpen.delete(groupOpen.keys().next().value);
       set(open4);
     };
-    const tip = `${inDropbox(v, f.path)} \u2014 clique para ver aqui, duplo clique para abrir`;
+    const tip = `${inDropbox(v, f.path)} \u2014 clique para ver aqui, duplo clique para abrir no Typora, \u2325 clique para mostrar no Finder`;
     row.setAttribute("title", tip);
     row.setAttribute("aria-label", tip);
-    row.addEventListener("click", toggle);
+    row.addEventListener("click", (e) => e.altKey ? go(portal(v, f.path)) : toggle());
     row.addEventListener("dblclick", (e) => {
       e.preventDefault();
-      v.act.view(f.path, void 0, e.shiftKey);
+      go(portal(v, f.path, "open"));
     });
     row.append(icon(DOC), h("span", { class: "rv-tl-name" }, f.label));
     if (tag2) row.append(h("span", { class: "rv-tagref" }, `#${tag2}`));

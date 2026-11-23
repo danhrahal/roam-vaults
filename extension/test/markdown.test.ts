@@ -121,3 +121,14 @@ test('embeds: a picture of the vault is Roam\'s image, a note, heading or block 
     assert.deepEqual([box.tag, box.dataset.rvEmbed, box.dataset.rvEmbedSub, box.textContent.startsWith('[[📎 ')], ['span', target, sub, true], s);
   }
 });
+
+test('a Markdown table is Roam\'s table', () => {
+  const root = new El('div');
+  assert.equal(blockBody(root as unknown as HTMLElement, '| Loaf | Hours |\n| :--- | ---: |\n| **Rye** | 18 |\n| [[a\\|b]] | x \\| y | extra |'), 0);
+  const box = (root.kids[0] as El).kids[0] as El, tb = ((box.kids[0] as El).kids[0] as El);
+  assert.equal(box.className, 'rm-table hoverparent dont-focus-block nodrag');
+  assert.deepEqual(tb.kids.map((tr) => (tr as El).kids.map((td) => (td as El).textContent)), [['Loaf', 'Hours', ''], ['Rye', '18', ''], ['b', 'x | y', 'extra']]);
+  assert.equal((((tb.kids[1] as El).kids[0] as El).kids[0] as El).className, 'rm-table__cell');
+  // pipes without the line of dashes are text
+  assert.deepEqual(body('| not | a table |\n| just | pipes |').length, 2);
+});

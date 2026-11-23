@@ -15,8 +15,7 @@ Roam has none, leave it out rather than invent UI.
 - **OKF v0.3**, read from the spec and tried with a made-up bundle. The GoogleCloudPlatform
   repository was deprecated on 2026-11-18 in favour of the one linked above.
 - **Roam 0.13.14**, measured in the public help graph: Linked References, clicks and modifiers, and
-  the Markdown export. Block references, embeds and inline images are measured too. Roam's tables have not been
-  measured yet.
+  the Markdown export. Block references, embeds, inline images, tables and numbered lists are measured too.
 - **Today** is the extension's source as of the pull request that added this page.
 
 ## Obsidian
@@ -27,7 +26,7 @@ Roam has none, leave it out rather than invent UI.
 | Folder | Only tells same-named notes apart | Namespace `A/B` | Grey folder prefix on the title; page `A/B` matches `A/B.md` | None |
 | Same name twice | The note in the linker's own folder wins | Titles are unique | Same folder, then shallowest, shortest, alphabetical | None seen |
 | Alias | Does not resolve links. Shows in the `[[` suggester, the switcher and unlinked mentions | No native alias | A page named like an alias shows the note | None |
-| Daily note | Folder and date format from `daily-notes.json` | Daily page | Daily page matches the daily note; the format is read | A date in a property does not link to the daily page |
+| Daily note | Folder and date format from `daily-notes.json` | Daily page | Daily page matches the daily note; the format is read. A date in a property is a reference on that day's page | None |
 | Wikilink | Opens the note in the same tab | Page reference | Roam's element; click opens the page, shift-click the sidebar | None |
 | Link with text `[[A\|b]]`, `[b](A.md)` | Shows `b` | Alias `[b]([[A]])` | Roam's alias element | None |
 | Heading link `[[A#H]]` | Shows "A > H", scrolls to the heading | Reference to the heading block | Reads "A > H"; a click opens the note with the heading marked | None |
@@ -36,17 +35,17 @@ Roam has none, leave it out rather than invent UI.
 | Image and PDF embed | Image with a width; PDF viewer | Inline image; `{{pdf}}` | Images show inline, read from the folder, with Obsidian's width. A PDF is a link | PDFs are not shown |
 | Tag, nested `#a/b` | Tag pane; a parent tag counts its children | A tag is a page; `a/b` is a namespace | The tag's page lists tagged notes, parents too | None |
 | Frontmatter `tags` | The list form only. A comma string makes no tags in 1.15.1 | Tags in a block | The list form, or one tag as a string | None |
-| Properties | Typed widgets; links are clickable | Attributes `Name:: value`; the attribute's page lists every use | `key:: value` blocks with a clickable key | Values are raw YAML; no list of notes per property |
-| Links in properties | Count as backlinks | References inside an attribute | Counted as backlinks | The reference block for a frontmatter line needs a test |
+| Properties | Typed widgets; links are clickable | Attributes `Name:: value`; the attribute's page lists every use | `key:: value` blocks as Roam would hold them: no quotes, tags as tags, a date as a link to that day, a list on one line as its values | No list of notes per property |
+| Links in properties | Count as backlinks | References inside an attribute | Counted as backlinks, drawn as the attribute block | None |
 | List item | Indented items | Blocks | Roam blocks, nested, with caret and children | None |
-| Numbered list | Numbers | A parent block viewed as numbered | Bullets | Numbers are lost |
+| Numbered list | Numbers | A parent block viewed as numbered | Numbers in place of bullets, as Roam draws them | None |
 | Heading, paragraph | Sections that fold | Heading blocks, levels 1 to 3 | A heading owns what follows; a paragraph is a block, wrapped lines joined | None |
 | Task | Checkbox; any status letter draws checked | `{{[[TODO]]}}`, `{{[[DONE]]}}` | Any status is a ticked box | None |
 | Callout | Coloured box with an icon; can fold | Blockquote | Blockquote | The kind is lost when there is a title; fold is ignored |
 | Quote | Blockquote | Blockquote | Blockquote | None |
 | Highlight `==x==` | Highlight | `^^x^^` | Roam's highlight | None |
 | Comment `%%x%%` | Hidden when reading | None | Hidden | None |
-| Table | Table | `{{table}}` | One block of raw pipes | Unreadable when wide |
+| Table | Table | `{{table}}` | Roam's table | Column alignment is not kept; Roam's tables have none |
 | Code | Highlighted | Code block | Plain `pre` | No highlighting |
 | Mermaid, math | Drawn, typeset | `{{mermaid}}`, `$$` | Code; raw TeX | Needs Roam's own renderers |
 | Footnote | Superscript and a notes section | None | Raw `[^1]` | Minor |
@@ -82,11 +81,11 @@ Obsidian keeps them in the file name and in wikilinks.
 | `title` | The note's name | Page title | Matched like an alias | Show it as the note's name |
 | `index.md` | Describes its folder | The page for that folder | The note for the page named like its folder | None |
 | `log.md` | Dated entries under `## YYYY-MM-DD` | Blocks on daily pages | Each day is a reference on that day's daily page, entries under it | None |
-| Path fields (`superseded_by`, `sources[].resource`) | Relations between notes | References in attributes | Not read as links | Count them as backlinks, drawn as the attribute block |
+| Path fields (`superseded_by`, `sources[].resource`) | Relations between notes | References in attributes | A path to a note in any property is a link to it, drawn as the attribute block | None |
 | `type`, `status` | Controlled words | Page references in an attribute | Raw text | Draw as page references, so a type's page lists its notes |
 | Markdown links | Resolved from the file's folder, then the bundle root; case-sensitive | Page reference | Root first; reference-style links are not read | Follow the spec's order; read reference-style links |
 | `tags` | A list | Tags | The list form, or one tag as a string | None |
-| Body text | Hard-wrapped paragraphs, GFM tables, footnotes | Blocks | Wrapped lines joined; raw pipes | Draw tables |
+| Body text | Hard-wrapped paragraphs, GFM tables, footnotes | Blocks | Wrapped lines joined; tables are Roam's table | Footnotes are raw |
 | Bundle | A folder of OKF files | A vault | Any folder is a vault | Detect a bundle and switch to OKF's rules |
 | Anchor `file.md#section` | A link to a section | Reference to the heading block | A click opens the note with the heading marked | None |
 
@@ -107,18 +106,19 @@ What the extension copies from Roam, measured in Linked References:
 - A page embed starts closed, as its title on a grey band; the bar at its left opens and closes it.
   A block embed shows the block and its children at once.
 - An image is 500 wide until it is resized.
+- A table's cells are 150 wide and its first row is like the others. The children of a block viewed
+  as numbered have their number where the bullet would be.
 - A Markdown export writes one `- ` bullet per block, four spaces a level, the page title as the
   file name, `/` in a title as a folder, and Roam's own inline syntax unchanged (`{{[[TODO]]}}`,
   `^^highlight^^`, `__italics__`, `Name::`).
 
 ## What is left, in rough order
 
-1. OKF: show `title` as the note's name, link order per the spec, path fields as backlinks.
-2. Properties as attributes: typed values, OKF path fields as backlinks, a page per property key.
+1. OKF: detect a bundle, show `title` as the note's name, link order per the spec, `type` and `status` as page references.
+2. A page per property key, listing the notes that have it.
 3. A note in the main window and the sidebar, in place of the dialog.
-4. Tables and numbered lists.
-5. Linked References' search and filter on the vault section, and its right-click menus.
-6. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
+4. Linked References' search and filter on the vault section, and its right-click menus.
+5. Unlinked mentions from vaults. This needs note text, so it belongs with full-text search.
 
 ## What cannot be mapped
 

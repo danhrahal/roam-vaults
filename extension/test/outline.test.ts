@@ -95,8 +95,8 @@ test('a whole note becomes an outline: properties, headings with what follows th
     '## Notes', 'last words',
   ].join('\n');
   assert.deepEqual(outlineOf(note).map(tree), [
-    'aliases:: [Levain]',
-    ['tags::', ['bread', 'starter']],
+    'aliases:: Levain',
+    ['tags::', ['#bread', '#starter']],
     ['# Sourdough', [
       'A wild yeast bread. Second line of the paragraph.',
       ['## Method', [['Mix', [['flour and [[Water]]', ['75% hydration']]]], 'Fold', '```\n- not a block\n```', '> a quote\n> of two lines']],
@@ -141,4 +141,27 @@ test('the line a link names: a heading by its text, a block by its id', () => {
   assert.equal(lineOfSub(note, '#Shape'), undefined);
   assert.equal(lineOfSub(note, '#^fol'), undefined);
   assert.equal(lineOfSub(note, '#'), undefined);
+});
+
+test('properties are attributes as Roam would hold them: no quotes, tags, dates as days, paths as links', () => {
+  const note = ['---', 'title: "Dark rye"', 'tags: [bread, rye]', 'baked: 2026-11-09', 'related: "[[Sourdough]]"', 'superseded_by: ../recipes/rye-2.md',
+    'sources:', '  - resource: notes/flour.md', '    note: \'from the mill\'', '  - "[[Mill]]"', 'servings: 12', 'draft: true', '---', 'Body.'].join('\n');
+  assert.deepEqual(outlineOf(note).map(tree), [
+    'title:: Dark rye', 'tags:: #bread #rye', 'baked:: [[November 9th, 2026]]', 'related:: [[Sourdough]]', 'superseded_by:: [../recipes/rye-2.md](../recipes/rye-2.md)',
+    ['sources::', ['resource: [notes/flour.md](notes/flour.md)', 'note: from the mill', '[[Mill]]']], 'servings:: 12', 'draft:: true', 'Body.',
+  ]);
+  // a line of the frontmatter that links: its attribute block, a value in a list under its property
+  const [rel, src, body] = contextOf(note, [4, 7, 13]);
+  assert.deepEqual([rel.text, rel.up], ['related:: [[Sourdough]]', []]);
+  assert.deepEqual([src.text, src.up], ['resource: [notes/flour.md](notes/flour.md)', [{ text: 'sources::', line: 6 }]]);
+  assert.equal(body.text, 'Body.');
+});
+
+test('items of a numbered list carry their numbers, counted as Markdown counts them', () => {
+  const nums = (b: any): any => (b.kids.length ? [b.n ?? '-', b.kids.map(nums)] : b.n ?? '-');
+  const note = ['Steps', '', '1. Mix', '1. Fold', '    - gently', '    3. twice', '    3. thrice', '7) Bake', '- Cool', '4. Eat', '', '^steps'].join('\n');
+  assert.deepEqual(outlineOf(note).map(nums), ['-', 1, [2, ['-', 3, 4]], 3, '-', 4]);
+  assert.deepEqual(kidsAt(note, 3).map((k) => k.n), [undefined, 3, 4]);
+  assert.deepEqual(contextOf(note, [3])[0].kids.map((k) => k.n), [undefined, 3, 4]);
+  assert.equal(outlineOf(note).some((b) => b.text.includes('^steps')), false); // a line that is only an id is no block
 });

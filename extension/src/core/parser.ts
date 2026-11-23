@@ -8,6 +8,8 @@ import {
   type Link, type ParsedNote, type ParseOptions, type Heading,
   F_TRIMMED, F_ESCAPED_PIPE, F_RELATIVE, F_ABSOLUTE, F_DECODE_FAIL, F_UNQUOTED_YAML, F_HAS_MD_EXT, F_EMPTY_ALIAS, F_ANGLE,
 } from './types.ts';
+import { RE_NOTE_PATH } from './outline.ts';
+const RE_ISO_DAY = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
 import { splitFrontmatter, extractAliases, extractFmTags } from './frontmatter.ts';
 
 const NL = 10, BS = 92, BT = 96, PCT = 37, LT = 60, DOL = 36, TILDE = 126;
@@ -243,6 +245,16 @@ export function parseNote(path: string, text: string, opts: ParseOptions = {}): 
         links.push({ kind: 'prop', embed: m[1] === '!', target: w.target, subpath: w.subpath, display: w.display,
           line: lineNo, col: m.index, flags, prop: intern(curKey),
           ...(opts.snippets ? { snippet: detach(l.trim().slice(0, 100)) } : {}) });
+      }
+      // A value that is a date is a reference to that day, as a date in a Roam attribute is; a value
+      // that is a path to a note (OKF's superseded_by, sources[].resource) is a link to that note.
+      const vm = /^\s*(?:-\s+)?(?:(?:"[^"]*"|'[^']*'|[^\s:#-][^:]*?)\s*:\s+)?(.+?)\s*$/.exec(l);
+      const inner = vm && /^\[(.*)\]$/.exec(vm[1]);
+      for (const part of vm ? (inner && !vm[1].startsWith('[[') ? inner[1].split(',') : [vm[1]]) : []) {
+        const v = part.trim().replace(/^(["'])(.*)\1$/, '$2');
+        const prop = { kind: 'prop' as const, embed: false, display: null, line: lineNo, col: 0, prop: intern(curKey), ...(opts.snippets ? { snippet: detach(l.trim().slice(0, 100)) } : {}) };
+        if (RE_ISO_DAY.test(v)) links.push({ ...prop, target: intern(v), subpath: '', flags: 0 });
+        else if (RE_NOTE_PATH.test(v)) { const d = parseMdDest(v); if (d) links.push({ ...prop, target: d.target, subpath: d.subpath, flags: d.flags }); }
       }
     }
   }

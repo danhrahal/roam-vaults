@@ -52,6 +52,8 @@ function picture() {
   const head = Buffer.alloc(13); head.writeUInt32BE(W, 0); head.writeUInt32BE(H, 4); head.set([8, 2, 0, 0, 0], 8);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
+const STEPS = ['Mix', 'Rest', 'Knead', 'Butter in', 'Knead again', 'Bulk', 'Fold', 'Chill', 'Shape', 'Proof', 'Egg wash', 'Bake'];
+const TABLE = [['Loaf', 'Flour', 'Hours'], ['**Brioche**', 'white [[T45]]', '16'], ['Rye', 'dark', '18']];
 // A block that names another block: Roam's ((uid)), Obsidian's [[Note#^id]]. And a link to a heading.
 const COLD = 'Cold proof: **18 hours** at 4°';
 const FILES = {
@@ -59,6 +61,10 @@ const FILES = {
   'Rota.md': '- [[Focaccia]] goes in after ((the cold proof))\n- [[Focaccia]] timing: see [[Proofing#Cold]]\n'.replace('((the cold proof))', '[[Proofing#^cold]]'),
   // embeds: a block, a heading with what is under it, a whole note, and a picture kept in the vault
   'Embeds.md': '- [[Ciabatta]] block ![[Proofing#^cold]]\n- [[Ciabatta]] heading ![[Proofing#Warm]]\n- [[Ciabatta]] note ![[Proofing]]\n- [[Ciabatta]] crumb ![open crumb](pictures/crumb.png)\n',
+  // a property that links: Roam's attribute block
+  'Rye notes.md': '---\nrelated: "[[Ciabatta]]"\ntags: [bread, rye]\n---\nDense crumb.\n',
+  // a numbered list under a line, and a table (embedded by its id, as Obsidian names a table)
+  'Brioche plan.md': `- [[Brioche]] steps\n${STEPS.map((t, i) => `    ${i + 1}. ${t}\n`).join('')}- [[Brioche]] table ![[Brioche plan#^amounts]]\n\n${TABLE.map((r, i) => `| ${r.join(' | ')} |\n${i ? '' : '| --- | --- | --- |\n'}`).join('')}\n^amounts\n`,
   'pictures/crumb.png': picture(),
   'Wholesale.md': exported(PAGES.Wholesale), 'Days/2026/July 9th, 2026.md': exported(PAGES['July 9th, 2026']), 'Sourdough.md': exported(PAGES[PAGE]) };
 
@@ -73,7 +79,7 @@ await page.waitForTimeout(3000);
 await page.addStyleTag({ content: '.bp3-portal .bp3-toast-container{display:none!important}' }); // the help graph's own warning
 
 // the pages, in the graph's memory
-await page.evaluate(async ({ PAGES, COLD }) => {
+await page.evaluate(async ({ PAGES, COLD, STEPS, TABLE }) => {
   const api = window.roamAlphaAPI;
   let n = 0;
   const add = async (parent, blocks) => {
@@ -94,12 +100,20 @@ await page.evaluate(async ({ PAGES, COLD }) => {
   await api.createBlock({ location: { 'parent-uid': 'rvhgwarm0', order: 0 }, block: { string: 'two hours at 26°', uid: 'rvhgwarm1' } });
   await api.createBlock({ location: { 'parent-uid': 'rvhgproof', order: 1 }, block: { string: 'Cold', uid: 'rvhgcold0', heading: 2, open: true } });
   await api.createBlock({ location: { 'parent-uid': 'rvhgcold0', order: 0 }, block: { string: COLD, uid: 'rvhgcold1' } });
+  await api.createPage({ page: { title: 'Rye notes', uid: 'rvhgryeno' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgryeno', order: 0 }, block: { string: 'related:: [[Ciabatta]]', uid: 'rvhgryen1' } });
+  await api.createPage({ page: { title: 'Brioche plan', uid: 'rvhgbrio0' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgbrio0', order: 0 }, block: { string: '[[Brioche]] steps', uid: 'rvhgbrio1', 'children-view-type': 'numbered' } });
+  for (const [i, string] of STEPS.entries()) await api.createBlock({ location: { 'parent-uid': 'rvhgbrio1', order: i }, block: { string, uid: 'rvhgstep' + String.fromCharCode(97 + i) } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgbrio0', order: 1 }, block: { string: '[[Brioche]] table {{[[embed]]: ((rvhgtable))}}', uid: 'rvhgbrio2' } });
+  await api.createBlock({ location: { 'parent-uid': 'rvhgbrio0', order: 2 }, block: { string: '{{[[table]]}}', uid: 'rvhgtable', open: false } });
+  for (const [y, row] of TABLE.entries()) { let parent = 'rvhgtable'; for (const [x, string] of row.entries()) { const uid = `rvhgtd${y}${x}x`; await api.createBlock({ location: { 'parent-uid': parent, order: x ? 0 : y }, block: { string, uid, open: true } }); parent = uid; } }
   await api.createPage({ page: { title: 'Embeds', uid: 'rvhgembed' } });
   for (const [i, string] of ['[[Ciabatta]] block {{[[embed]]: ((rvhgcold1))}}', '[[Ciabatta]] heading {{[[embed]]: ((rvhgwarm0))}}', '[[Ciabatta]] note {{[[embed]]: [[Proofing]]}}', '[[Ciabatta]] crumb ![open crumb](https://example.com/pictures/crumb.png)'].entries())
     await api.createBlock({ location: { 'parent-uid': 'rvhgembed', order: i }, block: { string, uid: 'rvhgembe' + i } });
   await api.createPage({ page: { title: 'Rota', uid: 'rvhgrota1' } });
   await api.createBlock({ location: { 'parent-uid': 'rvhgrota1', order: 0 }, block: { string: '[[Focaccia]] goes in after ((rvhgcold1))', uid: 'rvhgrota2' } });
-}, { PAGES, COLD });
+}, { PAGES, COLD, STEPS, TABLE });
 
 // the vault, in the browser's private file system, connected through the folder picker (stubbed)
 await page.evaluate(async ({ FILES, code }) => {
@@ -141,7 +155,7 @@ const measure = () => page.evaluate(() => {
   const ITEM = {
     crumbs: '.rm-zoom', crumb: '.rm-zoom-item-content', chevron: '.rm-mention-icon', controls: '.rm-block__controls', caret: '.block-expand .rm-caret', bullet: '.rm-bullet__inner',
     text: '.rm-block-text', link: '.rm-block-text .rm-page-ref--link', bracket: '.rm-block-text .rm-page-ref__brackets', tag: '.rm-page-ref--tag', alias: '.rm-alias', bold: '.rm-bold', italic: '.rm-italics',
-    highlight: '.rm-highlight', blockref: '.rm-block-ref', embed: '.rm-embed-container', embedbar: '.rm-embed-margin-action', embedtitle: 'h3.rm-page__title', img: '.rm-inline-img', imgbox: '.rm-inline-img__resize', attr: '.rm-attr-ref', checkbox: '.checkmark', kids: '.rm-block-children', multibar: '.rm-multibar',
+    highlight: '.rm-highlight', blockref: '.rm-block-ref', number: '.rm-bullet__inner--numbered', embed: '.rm-embed-container', embedbar: '.rm-embed-margin-action', embedtitle: 'h3.rm-page__title', img: '.rm-inline-img', imgbox: '.rm-inline-img__resize', attr: '.rm-attr-ref', checkbox: '.checkmark', kids: '.rm-block-children', multibar: '.rm-multibar',
   };
   const STYLE = ['color', 'backgroundColor', 'fontSize', 'lineHeight', 'fontWeight', 'fontStyle', 'opacity', 'marginTop', 'marginLeft', 'paddingTop', 'paddingLeft', 'borderTopColor', 'borderTopWidth'];
   const r1 = (n) => Math.round(n * 10) / 10;
@@ -313,6 +327,32 @@ await page.waitForTimeout(800);
 await shot('11-note-embed-open.png');
 check('the bar at a note embed\'s left opens the note in place, as a page embed opens in Roam', JSON.stringify(await page.locator('.rv-panel .rm-embed__content .rm-block-text').allInnerTexts()) === JSON.stringify(await page.locator('.rm-reference-container .rm-embed__content > .rm-block-children .rm-block-text').allInnerTexts()));
 check('a page embedded by Roam lists its own vault references, not the page\'s', await page.evaluate(() => document.querySelector('.rm-reference-container .rm-embed--page .rv-panel')?.dataset.title === 'Proofing'));
+
+// ---------- a numbered list and a table ----------
+await open('Brioche');
+await page.waitForSelector('.rv-panel .rm-table td');
+await page.waitForTimeout(500);
+for (const root of ['.roam-article .rm-reference-container', '.roam-article .rv-panel']) {
+  const item = page.locator(`${root} .rm-reference-item`, { hasText: 'steps' });
+  await item.locator('.rm-block-main').first().hover();
+  await item.locator('.block-expand .rm-caret').first().click();
+}
+await page.mouse.move(5, 5);
+await page.waitForSelector('.rv-panel .rm-bullet__inner--numbered');
+await page.waitForTimeout(500);
+await shot('12-numbered-and-table.png');
+{
+  const m = await measure();
+  const only = (g) => ({ 'Brioche plan': g['Brioche plan'] && { ...g['Brioche plan'], parts: { caret: g['Brioche plan'].parts.caret, title: g['Brioche plan'].parts.title }, height: 0, items: Object.fromEntries(Object.entries(g['Brioche plan'].items).filter(([t]) => t.includes('steps'))) } });
+  compare({ ...m, roam: only(m.roam), vault: only(m.vault) }, 'numbered list');
+  // the table: every cell's place, size and style inside the table, and what it says
+  const tables = await page.evaluate(() => ['.roam-article .rm-reference-container', '.roam-article .rv-panel'].map((root) => {
+    const t = document.querySelector(`${root} .rm-table table`), o = t.getBoundingClientRect(), r1 = (n) => Math.round(n * 10) / 10;
+    return [...t.querySelectorAll('td')].map((td) => { const r = td.getBoundingClientRect(), cs = getComputedStyle(td), c = td.querySelector('.rm-table__cell'), cc = getComputedStyle(c);
+      return [c.innerText, r1(r.left - o.left), r1(r.top - o.top), r1(r.width), r1(r.height), cs.borderTopWidth, cs.borderTopColor, cs.padding, cs.backgroundColor, cc.fontSize, cc.fontWeight, cc.color, cc.padding, !!c.querySelector('.rm-bold'), !!c.querySelector('.rm-page-ref--link')].join(' | '); });
+  }));
+  check(`a Markdown table is Roam's table: ${tables[0].length} cells in the same place, size and style`, tables[0].length === 9 && JSON.stringify(tables[0]) === JSON.stringify(tables[1]), '\n  roam  ' + tables[0].join('\n        ') + '\n  vault ' + tables[1].join('\n        '));
+}
 fs.writeFileSync(path.join(OUT, 'measured.json'), JSON.stringify(await measure(), null, 1));
 
 check('no errors in the page', !errors.length, errors.join(' | ').slice(0, 500));

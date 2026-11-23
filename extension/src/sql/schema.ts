@@ -38,6 +38,7 @@ export const MIGRATIONS: ((db: Db) => void)[] = [
   },
   // A note's title property is an alias, a log's days are links, and tags are read as Obsidian
   // reads them: what was read before is read again.
+  (db) => db.exec('DELETE FROM fuzzy_name; DELETE FROM link_names; DELETE FROM note_keys; DELETE FROM notes; DELETE FROM files; DELETE FROM meta;'),  // 4: dates and paths to notes in properties are links now: read again.
   (db) => db.exec('DELETE FROM fuzzy_name; DELETE FROM link_names; DELETE FROM note_keys; DELETE FROM notes; DELETE FROM files; DELETE FROM meta;'),
 ];
 

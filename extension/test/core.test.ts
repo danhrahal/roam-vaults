@@ -152,3 +152,20 @@ test('frontmatter tags: a list gives its tags, a string one tag when it can be o
   assert.deepEqual(extractFmTags({ tags: 'bake, pastry' }), []);
   assert.deepEqual(extractFmTags({ tag: 'bake pastry' }), []);
 });
+
+test('OKF: title names a note, index.md stands for its folder, a log\'s days are links to those days', () => {
+  const idx = new VaultIndex();
+  idx.build([
+    note('index.md', '---\nokf_version: "0.3"\ntitle: Bakery\n---\n'),
+    note('log.md', '## 2026-11-21\n\n- Added the rye loaf\n\n## 2026-11-20\n\n- First entries\n'),
+    note('products/index.md', '## Breads\n'),
+    note('products/country-sourdough.md', '---\ntitle: Country Sourdough Loaf\n---\nA wild yeast bread.\n'),
+    note('suppliers/index.md', ''),
+  ], []);
+  const m = new RoamMatcher(idx, { dailyFormats: ['DD-MM-YYYY'] });
+  assert.deepEqual(m.associations('Country Sourdough Loaf').notes, [{ path: 'products/country-sourdough.md', how: 'alias' }]);
+  assert.deepEqual(m.associations('Products').notes, [{ path: 'products/index.md', how: 'path' }]);
+  assert.deepEqual(m.associations('Index').notes, []);
+  const day = m.associations('November 21st, 2026');
+  assert.deepEqual(day.links.map((l) => [l.src, l.line]), [['log.md', 0]]);
+});

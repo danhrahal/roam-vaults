@@ -121,3 +121,12 @@ test('a line of a paragraph too long to show is shown alone', () => {
   assert.equal(c.text, '[[Rye]] at the end');
   assert.equal(c.line, 1);
 });
+
+test('a heading comes with what it owns, up to the next heading of its level', () => {
+  const md = '## 2026-11-21\n\n- Added the rye loaf\n    - by Ines\n\nA note.\n\n### Later\n\n- More\n\n## 2026-11-20\n\n- First entries\n';
+  const [c] = contextOf(md, [0]);
+  assert.equal(c.text, '2026-11-21');
+  assert.deepEqual(c.kids.map((k) => k.text), ['Added the rye loaf', 'A note.', '### Later']);
+  assert.deepEqual(c.kids[0].kids.map((k) => k.text), ['by Ines']);
+  assert.deepEqual(c.kids[2].kids.map((k) => k.text), ['More']);
+});

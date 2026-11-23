@@ -188,6 +188,7 @@ function context(r: Row[], n: number): LineContext {
   const budget = { n: MAX_KIDS };
   const b: LineContext = { text: alone ? clip(row.text) : blockText(r, at), line: at, kids: [], up: [...heads, ...up] };
   if (row.kind === 'item') kidsOf(r, at, b, budget);
+  else if (row.kind === 'heading') fill(r, at + 1, sectionEnd(r, at), b, budget); // what the heading owns
   return b;
 }
 
@@ -223,10 +224,53 @@ function skip(r: Row[], i: number, at: number): number {
 /** Every block under one block of a note, for a block that came `cut`. */
 export function kidsAt(text: string, line: number): OutlineBlock[] {
   const r = rows(text);
-  if (r[line]?.kind !== 'item') return [];
+  if (r[line]?.kind !== 'item' && r[line]?.kind !== 'heading') return [];
   const b: OutlineBlock = { text: '', line, kids: [] };
-  kidsOf(r, line, b, { n: Infinity });
+  if (r[line].kind === 'heading') fill(r, line + 1, sectionEnd(r, line), b, { n: Infinity });
+  else kidsOf(r, line, b, { n: Infinity });
   return b.kids;
+}
+
+/** The blocks of lines [i, end) of a note, put under `root`: headings with what follows them, list
+ *  items nested by indentation, paragraphs and code. Stops adding when the budget is spent, and
+ *  marks `root` cut. */
+function fill(r: Row[], i: number, end: number, root: OutlineBlock, budget: { n: number }) {
+  const heads: { level: number; b: OutlineBlock }[] = [];
+  let items: { indent: number; b: OutlineBlock }[] = [];
+  const under = () => heads[heads.length - 1]?.b ?? root;
+  const spend = () => { if (budget.n <= 0) { root.cut = true; return false; } budget.n--; return true; };
+  while (i < end) {
+    const row = r[i];
+    if (row.kind === 'blank') { i++; continue; }
+    if (!spend()) return;
+    if (row.kind === 'heading') {
+      while (heads.length && heads[heads.length - 1].level >= row.level) heads.pop();
+      const b: OutlineBlock = { text: clip('#'.repeat(row.level) + ' ' + row.text), line: i, kids: [] };
+      under().kids.push(b); heads.push({ level: row.level, b }); items = [];
+      i++; continue;
+    }
+    if (row.kind === 'item') {
+      while (items.length && items[items.length - 1].indent >= row.indent) items.pop();
+      const b: OutlineBlock = { text: blockText(r, i), line: i, kids: [] };
+      (items[items.length - 1]?.b ?? under()).kids.push(b); items.push({ indent: row.indent, b });
+      i = ownEnd(r, i); continue;
+    }
+    // a paragraph, a quote, a table: the lines up to a blank one. A block of code: up to its end.
+    let stop = i + 1;
+    while (stop < end && r[stop].kind === row.kind) stop++;
+    const part = r.slice(i, stop), base = Math.min(...part.map((p) => p.indent));
+    if (row.indent === 0) items = [];
+    const body = row.kind === 'text' ? paraText(part) : part.map((p) => ' '.repeat(p.indent - base) + p.text).join('\n');
+    (row.indent > 0 && items.length ? items[items.length - 1].b : under()).kids.push({ text: clip(body), line: i, kids: [] });
+    i = stop;
+  }
+}
+
+/** One past the last line under the heading on line n: the next heading of its level or above. */
+function sectionEnd(r: Row[], n: number): number {
+  let i = n + 1;
+  for (; i < r.length; i++) if (r[i].kind === 'heading' && r[i].level <= r[n].level) break;
+  return i;
 }
 
 /** A whole note as an outline, the way Roam would hold it as a page: each property of its
@@ -248,33 +292,7 @@ export function outlineOf(text: string): OutlineBlock[] {
     }
     i++;
   }
-  const heads: { level: number; b: OutlineBlock }[] = [];
-  let items: { indent: number; b: OutlineBlock }[] = [];
-  const under = () => heads[heads.length - 1]?.b ?? root;
-  while (i < r.length) {
-    const row = r[i];
-    if (row.kind === 'blank') { i++; continue; }
-    if (row.kind === 'heading') {
-      while (heads.length && heads[heads.length - 1].level >= row.level) heads.pop();
-      const b: OutlineBlock = { text: clip('#'.repeat(row.level) + ' ' + row.text), line: i, kids: [] };
-      under().kids.push(b); heads.push({ level: row.level, b }); items = [];
-      i++; continue;
-    }
-    if (row.kind === 'item') {
-      while (items.length && items[items.length - 1].indent >= row.indent) items.pop();
-      const b: OutlineBlock = { text: blockText(r, i), line: i, kids: [] };
-      (items[items.length - 1]?.b ?? under()).kids.push(b); items.push({ indent: row.indent, b });
-      i = ownEnd(r, i); continue;
-    }
-    // a paragraph, a quote, a table: the lines up to a blank one. A block of code: up to its end.
-    let end = i + 1;
-    while (end < r.length && r[end].kind === row.kind) end++;
-    const part = r.slice(i, end), base = Math.min(...part.map((p) => p.indent));
-    if (row.indent === 0) items = [];
-    const body = row.kind === 'text' ? paraText(part) : part.map((p) => ' '.repeat(p.indent - base) + p.text).join('\n');
-    (row.indent > 0 && items.length ? items[items.length - 1].b : under()).kids.push({ text: clip(body), line: i, kids: [] });
-    i = end;
-  }
+  fill(r, i, r.length, root, { n: Infinity });
   return root.kids;
 }
 

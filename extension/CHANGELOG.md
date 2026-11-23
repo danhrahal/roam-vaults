@@ -18,6 +18,11 @@
 - A paragraph wrapped over several lines in the file is one block, not one block per line.
 - Obsidian's `%%comments%%` and block ids (`^a1b2c3`) are hidden, as in Obsidian's reading view. Tasks
   with a custom status (`[/]`, `[-]`, `[?]`, `[!]`) are drawn as ticked boxes, as Obsidian draws them.
+- OKF bundles: a note is found by its frontmatter `title` as well as its file name, a folder's
+  `index.md` is the note for the page named like the folder, and each day of a `log.md` is a reference on
+  that day's daily page. A page called Index or Log no longer lists every folder's `index.md` or `log.md`.
+- A heading that links to the page comes with what is under it, behind its caret.
+- The index is built again by the first scan after this update.
 - Frontmatter `tags` written as one string with commas or spaces (`tags: a, b`) no longer make tags.
   Obsidian reads tags from a list (`tags: [a, b]`), and Vaults now does the same.
 

@@ -79,9 +79,9 @@ Obsidian keeps them in the file name and in wikilinks.
 
 | OKF | What the spec says | Roam equivalent | Today | Gap |
 | --- | --- | --- | --- | --- |
-| `title` | The note's name | Page title | Ignored; the file name is used | Match on `title` and show it as the name |
-| `index.md` | Describes its folder | The page for that folder | A note called "index" | Let it stand for the folder's page; never match a page called index |
-| `log.md` | Dated entries under `## YYYY-MM-DD` | Blocks on daily pages | A note called "log" | Each entry as a reference on that day's daily page |
+| `title` | The note's name | Page title | Matched like an alias | Show it as the note's name |
+| `index.md` | Describes its folder | The page for that folder | The note for the page named like its folder | None |
+| `log.md` | Dated entries under `## YYYY-MM-DD` | Blocks on daily pages | Each day is a reference on that day's daily page, entries under it | None |
 | Path fields (`superseded_by`, `sources[].resource`) | Relations between notes | References in attributes | Not read as links | Count them as backlinks, drawn as the attribute block |
 | `type`, `status` | Controlled words | Page references in an attribute | Raw text | Draw as page references, so a type's page lists its notes |
 | Markdown links | Resolved from the file's folder, then the bundle root; case-sensitive | Page reference | Root first; reference-style links are not read | Follow the spec's order; read reference-style links |
@@ -110,7 +110,7 @@ What the extension copies from Roam, measured in Linked References:
 
 ## What is left, in rough order
 
-1. OKF names and structure: `title`, `index.md`, `log.md`, link order per the spec.
+1. OKF: show `title` as the note's name, link order per the spec, path fields as backlinks.
 2. Heading and block links as Roam block references.
 3. Embeds drawn in place.
 4. Properties as attributes: typed values, OKF path fields as backlinks, a page per property key.

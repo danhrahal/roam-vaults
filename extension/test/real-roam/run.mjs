@@ -33,6 +33,8 @@ const TEST_PAGE = 'Vaults CI test';
 // A page no note is, with a note whose name has two letters swapped: a similar-name (fuzzy) match.
 const FUZZY_PAGE = 'Vaults CI fuzzy check', FUZZY_NOTE = 'Vaults CI fuzzy chekc';
 const SMALL = 'CI Vault', BIG = 'Big Vault';
+// a vault that is only a folder of Markdown files: no .obsidian, no OKF index
+const PLAIN = 'Plain notes', PLAIN_PAGE = 'Vaults CI plain';
 // MB the extension adds over Roam without it. PR #16 measured 193 / 89 / 168 / 235 / 383 at 20,000
 // notes on Roam 0.0.42 (Linux); 0.1.0 measured 466 / 325 / 827 / 1,389 / 2,698.
 const LIMITS = {
@@ -142,6 +144,13 @@ async function main() {
     '.obsidian/app.json': '{}',
   };
   for (const [rel, text] of Object.entries(smallFiles)) { fs.mkdirSync(path.dirname(path.join(small, rel)), { recursive: true }); fs.writeFileSync(path.join(small, rel), text); }
+  const plain = path.join(WORK, PLAIN);
+  const plainFiles = {
+    [`${PLAIN_PAGE}.md`]: `A plain Markdown file for this page.\n`,
+    'Garden/Seed list.md': `- sow carrots, see [[${PLAIN_PAGE}]]\n`,
+    'Garden/Beds/North bed.md': `Watered on Monday. Notes in [the plain page](../../${PLAIN_PAGE.replace(/ /g, '%20')}.md).\n`,
+  };
+  for (const [rel, text] of Object.entries(plainFiles)) { fs.mkdirSync(path.dirname(path.join(plain, rel)), { recursive: true }); fs.writeFileSync(path.join(plain, rel), text); }
   const gen = genVault(NOTES, big);
   log(`generated ${BIG}: ${gen.files} files, ${gen.mb} MB`);
 
@@ -248,6 +257,18 @@ async function main() {
   const gone = await waitFor('the folder\'s notes to go', async () => !(await folderRows()).length, 20000).then(() => true, () => false);
   check('Removing the folder on disk removes its notes', gone, JSON.stringify(await folderRows()));
 
+  // plain vault: a folder of Markdown files and nothing else still works
+  await addVault(plain);
+  const plainScanned = await waitFor(`${PLAIN} to finish scanning`, async () => /^3 notes$/.test(await statusOf(PLAIN)), 30000).then(() => true, () => false);
+  check('A plain folder of Markdown files (no .obsidian) scans', plainScanned, await statusOf(PLAIN));
+  await openPage(PLAIN_PAGE);
+  const tp = await waitFor('External Vault References on the plain page', async () => { const t = await panelText(); return t.includes('External Vault References') && t; }, 15000).catch(() => '');
+  check('Plain vault: its notes show as External Vault References', tp.includes('3 External Vault References'), tp.split('\n')[0]);
+  check('Plain vault: the note named like the page is listed first', (await evalIn(() => document.querySelector('.roam-article .rv-panel .rv-note')?.textContent.trim()))?.endsWith(PLAIN_PAGE));
+  check('Plain vault: a [[wikilink]] line from a nested folder shows', tp.includes('sow carrots'));
+  check('Plain vault: a relative Markdown link two folders down shows', tp.includes('Watered on Monday'));
+  await shot('page-plain-vault');
+
   // large vault: memory
   await addVault(big);
   const cold = sample('cold-scan', 90000, 60000);
@@ -339,7 +360,7 @@ async function main() {
       const l = await navigator.locks.query(), ours = (x) => x.name.startsWith('roam-vaults:');
       return `${l.held.filter(ours).length} vaults open, ${l.pending.filter(ours).length} waited for`;
     }).catch((e) => e.message);
-    check("…from the first one's index, without opening the vaults again", locks === '2 vaults open, 2 waited for', locks);
+    check("…from the first one's index, without opening the vaults again", locks === '3 vaults open, 3 waited for', locks);
     fs.writeFileSync(path.join(small, 'Two windows note.md'), `Written with Roam open twice, links [[${TEST_PAGE}]].\n`);
     const both = await waitFor('the new note in both', async () => (await panelText()).includes('Two windows note') && (await text2()).includes('Two windows note'), 20000).then(() => true, () => false);
     check('A note added on disk shows up in both', both);

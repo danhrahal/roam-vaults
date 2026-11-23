@@ -4,6 +4,8 @@
 
 - The README has a section and a picture, taken in real Roam, for embeds and block links, property pages,
   OKF bundles, and the section's search and filter.
+- A vault can still be just a folder of Markdown files, with no `.obsidian` folder and no OKF index: the
+  real-Roam test now checks one with nested folders, a wikilink and a relative Markdown link.
 
 - External Vault References are drawn like Roam's Linked References. A line that links to the page is a
   Roam block with the headings and list items it sits under as a path above it; click a part of the path
@@ -52,6 +54,8 @@
 - A property's name is a page, as an attribute's name is in Roam: the page **author** lists every note
   with an `author` property, and a `Name::` written in a note (as Roam's Markdown export writes one)
   counts the same. Tags, aliases and `cssclasses` are left out: they are Roam's tags and aliases.
+- Footnotes are Roam block references: `[^1]` shows the footnote's text and opens the note at it, the
+  footnote is a block of its own, and an inline footnote `^[text]` shows its text.
 - Reference-style Markdown links (`[text][ref]`, `[ref]: target.md`) are links: they count on the
   page they name and are drawn as the link they stand for, with the lines that define them hidden.
 - The section's header has Linked References' search box and filter. A search shows the references
